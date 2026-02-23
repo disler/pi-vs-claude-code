@@ -63,7 +63,7 @@ export default function (pi: ExtensionAPI) {
 		const rulesPath = path.join(ctx.cwd, ".pi", "damage-control-rules.yaml");
 		try {
 			if (fs.existsSync(rulesPath)) {
-				const content = fs.readFileSync(rulesPath, "utf8");
+				const content = fs.readFileSync(rulesPath, "utf8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 				const loaded = yamlParse(content) as Partial<Rules>;
 				rules = {
 					bashToolPatterns: loaded.bashToolPatterns || [],

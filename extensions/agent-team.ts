@@ -78,7 +78,7 @@ function parseTeamsYaml(raw: string): Record<string, string[]> {
 
 function parseAgentFile(filePath: string): AgentDef | null {
 	try {
-		const raw = readFileSync(filePath, "utf-8");
+		const raw = readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 		const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
 		if (!match) return null;
 
@@ -158,7 +158,7 @@ export default function (pi: ExtensionAPI) {
 		const teamsPath = join(cwd, ".pi", "agents", "teams.yaml");
 		if (existsSync(teamsPath)) {
 			try {
-				teams = parseTeamsYaml(readFileSync(teamsPath, "utf-8"));
+				teams = parseTeamsYaml(readFileSync(teamsPath, "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
 			} catch {
 				teams = {};
 			}

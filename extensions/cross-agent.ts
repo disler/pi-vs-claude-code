@@ -82,7 +82,7 @@ function scanCommands(dir: string): Discovered[] {
 	try {
 		for (const file of readdirSync(dir)) {
 			if (!file.endsWith(".md")) continue;
-			const raw = readFileSync(join(dir, file), "utf-8");
+			const raw = readFileSync(join(dir, file), "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 			const { description, body } = parseFrontmatter(raw);
 			items.push({
 				name: basename(file, ".md"),
@@ -117,7 +117,7 @@ function scanAgents(dir: string): Discovered[] {
 	try {
 		for (const file of readdirSync(dir)) {
 			if (!file.endsWith(".md")) continue;
-			const raw = readFileSync(join(dir, file), "utf-8");
+			const raw = readFileSync(join(dir, file), "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 			const { fields } = parseFrontmatter(raw);
 			items.push({
 				name: fields.name || basename(file, ".md"),
