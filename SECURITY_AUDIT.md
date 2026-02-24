@@ -104,6 +104,16 @@ spawn("pi", args, {
 });
 ```
 
+#### Additional Findings
+
+Investigation of the pi-pi experts revealed that `firecrawl` is not used as a Pi tool — it is invoked as a CLI binary through bash. All 9 pi-pi expert agents (ext-expert, theme-expert, skill-expert, etc.) declare `tools: read,grep,find,ls,bash` and their system prompts instruct them to run:
+
+```bash
+firecrawl scrape <url> -f markdown -o /tmp/... || curl -sL <url> -o /tmp/...
+```
+
+The `firecrawl` CLI consumes `FIRECRAWL_API_KEY` from the environment directly. If the key is missing, the command fails and the `|| curl` fallback fetches the content instead. This means restricting the environment would degrade firecrawl to curl for these experts, but would not break them.
+
 #### Fix Plan
 
 Create a `buildSubprocessEnv()` helper in `extensions/utils/env.ts` that constructs a minimal environment. It includes only:
@@ -125,7 +135,7 @@ The helper maps provider prefixes to env var names:
 
 #### Behavior Change
 
-Subagents using OpenAI models would no longer see `ANTHROPIC_API_KEY` and vice versa. The pi-pi experts that use firecrawl would need `env: FIRECRAWL_API_KEY` added to their frontmatter. Any extension spawning a subprocess that relies on an unexpected env var (like a custom `NODE_PATH` or proxy config) would break until that var is added to the allowlist. Most workflows would be unaffected since subprocesses only need the one API key for their model.
+Subagents using OpenAI models would no longer see `ANTHROPIC_API_KEY` and vice versa. The pi-pi experts would lose access to `FIRECRAWL_API_KEY` unless explicitly declared in their frontmatter — but their system prompts already include a `curl` fallback, so they would continue to work by falling back from firecrawl to curl. Adding `env: FIRECRAWL_API_KEY` to the 9 expert `.md` files would restore firecrawl access for those agents specifically. Any extension spawning a subprocess that relies on an unexpected env var (like a custom `NODE_PATH` or proxy config) would break until that var is added to the allowlist. Most workflows would be unaffected since subprocesses only need the one API key for their model.
 
 ---
 
