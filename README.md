@@ -151,6 +151,10 @@ just open purpose-gate minimal tool-counter-widget
 ```
 pi-vs-cc/
 ├── extensions/          # Pi extension source files (.ts) — one file per extension
+│   └── utils/           # Shared utilities used by multiple extensions
+│       └── agent-loader.ts  # Validated agent .md file loader (SEC-001)
+├── tests/               # Test suite
+│   └── agent-loader.test.ts # 42 tests for agent validation logic
 ├── specs/               # Feature specifications for extensions
 ├── .pi/
 │   ├── agent-sessions/  # Ephemeral session files (gitignored)
@@ -165,6 +169,7 @@ pi-vs-cc/
 │   └── settings.json    # Pi workspace settings
 ├── justfile             # just task definitions
 ├── CLAUDE.md            # Conventions and tooling reference (for agents)
+├── SECURITY_AUDIT.md    # Security audit — 15 issues tracked with fix plans
 ├── THEME.md             # Color token conventions for extension authors
 └── TOOLS.md             # Built-in tool function signatures available in extensions
 ```
@@ -203,6 +208,22 @@ The `damage-control` extension provides real-time security hooks to prevent cata
 - **Read-Only Paths**: Allows reading but blocks modifying system files or lockfiles (`package-lock.json`, `/etc/`).
 - **No-Delete Paths**: Allows modifying but prevents deleting critical project configuration (`.git/`, `Dockerfile`, `README.md`).
 
+### Agent Definition Validation
+
+Extensions that spawn subprocesses (`agent-team`, `agent-chain`, `pi-pi`) pass agent `.md` file contents as CLI arguments. To prevent injection via malicious agent definitions, all three use a shared loader (`extensions/utils/agent-loader.ts`) that validates every agent file at load time:
+
+- **Name**: Must be alphanumeric with dashes/underscores/dots, max 64 characters. Names with shell metacharacters (`;`, `$`, `` ` ``, `|`, `&`) are rejected.
+- **Tools**: Checked against a known allowlist. Unknown tools produce a warning.
+- **System prompt**: Scanned for shell injection patterns (`$(…)`, pipe to shell, chained destructive commands, null bytes, `eval()`). Capped at 50,000 characters.
+
+Agents with error-severity issues are rejected and won't load. Suspicious content produces warnings but still allows loading. See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for the full audit.
+
+### Running Tests
+
+```bash
+npx tsx --test tests/agent-loader.test.ts
+```
+
 ---
 
 ## Extension Author Reference
@@ -213,6 +234,7 @@ Companion docs cover the conventions used across all extensions in this repo:
 - **[RESERVED_KEYS.md](RESERVED_KEYS.md)** — Pi reserved keybindings, overridable keys, and safe keys for extension authors.
 - **[THEME.md](THEME.md)** — Color language: which Pi theme tokens (`success`, `accent`, `warning`, `dim`, `muted`) map to which UI roles, with examples.
 - **[TOOLS.md](TOOLS.md)** — Function signatures for the built-in tools available inside extensions (`read`, `bash`, `edit`, `write`).
+- **[SECURITY_AUDIT.md](SECURITY_AUDIT.md)** — Full security audit: 15 issues identified with severity ratings, fix plans, and behavior impact analysis.
 
 ---
 
