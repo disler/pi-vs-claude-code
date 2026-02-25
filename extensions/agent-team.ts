@@ -51,7 +51,50 @@ interface AgentState {
 // ── Display Name Helper ──────────────────────────
 
 function displayName(name: string): string {
-	return name.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+	return name
+		.split("-")
+		.map(function toDisplayWord(word) {
+			return word.charAt(0).toUpperCase() + word.slice(1);
+		})
+		.join(" ");
+}
+
+function getStatusColor(status: AgentState["status"]): string {
+	switch (status) {
+		case "idle":
+			return "dim";
+		case "running":
+			return "accent";
+		case "done":
+			return "success";
+		default:
+			return "error";
+	}
+}
+
+function getStatusIcon(status: AgentState["status"]): string {
+	switch (status) {
+		case "idle":
+			return "○";
+		case "running":
+			return "●";
+		case "done":
+			return "✓";
+		default:
+			return "✗";
+	}
+}
+
+function getDefaultGridColumns(teamSize: number): number {
+	if (teamSize <= 3) {
+		return teamSize;
+	}
+
+	if (teamSize === 4) {
+		return 2;
+	}
+
+	return 3;
 }
 
 // ── Teams YAML Parser ────────────────────────────
@@ -134,7 +177,7 @@ function scanAgentDirs(cwd: string): AgentDef[] {
 
 // ── Extension ────────────────────────────────────
 
-export default function (pi: ExtensionAPI) {
+export default function agentTeamExtension(pi: ExtensionAPI): void {
 	const agentStates: Map<string, AgentState> = new Map();
 	let allAgentDefs: AgentDef[] = [];
 	let teams: Record<string, string[]> = {};
@@ -198,21 +241,22 @@ export default function (pi: ExtensionAPI) {
 
 		// Auto-size grid columns based on team size
 		const size = agentStates.size;
-		gridCols = size <= 3 ? size : size === 4 ? 2 : 3;
+		gridCols = getDefaultGridColumns(size);
 	}
 
 	// ── Grid Rendering ───────────────────────────
 
 	function renderCard(state: AgentState, colWidth: number, theme: any): string[] {
 		const w = colWidth - 2;
-		const truncate = (s: string, max: number) => s.length > max ? s.slice(0, max - 3) + "..." : s;
+		function truncate(value: string, max: number): string {
+			if (value.length > max) {
+				return value.slice(0, max - 3) + "...";
+			}
+			return value;
+		}
 
-		const statusColor = state.status === "idle" ? "dim"
-			: state.status === "running" ? "accent"
-			: state.status === "done" ? "success" : "error";
-		const statusIcon = state.status === "idle" ? "○"
-			: state.status === "running" ? "●"
-			: state.status === "done" ? "✓" : "✗";
+		const statusColor = getStatusColor(state.status);
+		const statusIcon = getStatusIcon(state.status);
 
 		const name = displayName(state.def.name);
 		const nameStr = theme.fg("accent", theme.bold(truncate(name, w)));
@@ -344,10 +388,12 @@ export default function (pi: ExtensionAPI) {
 		const agentSessionFile = join(sessionDir, `${agentKey}.json`);
 
 		// Build args — first run creates session, subsequent runs resume
+		const permissionGateExt = resolve(ctx.cwd, "extensions", "permission-gate.ts");
+
 		const args = [
 			"--mode", "json",
 			"-p",
-			"--no-extensions",
+			"-e", permissionGateExt,
 			"--model", model,
 			"--tools", state.def.tools,
 			"--thinking", "off",
@@ -488,9 +534,10 @@ export default function (pi: ExtensionAPI) {
 
 				const result = await dispatchAgent(agent, task, ctx);
 
-				const truncated = result.output.length > 8000
-					? result.output.slice(0, 8000) + "\n\n... [truncated]"
-					: result.output;
+				let truncated = result.output;
+				if (result.output.length > 8000) {
+					truncated = result.output.slice(0, 8000) + "\n\n... [truncated]";
+				}
 
 				const status = result.exitCode === 0 ? "done" : "error";
 				const summary = `[${agent}] ${status} in ${Math.round(result.elapsed / 1000)}s`;
@@ -550,9 +597,10 @@ export default function (pi: ExtensionAPI) {
 				theme.fg("dim", ` ${elapsed}s`);
 
 			if (options.expanded && details.fullOutput) {
-				const output = details.fullOutput.length > 4000
-					? details.fullOutput.slice(0, 4000) + "\n... [truncated]"
-					: details.fullOutput;
+				let output = details.fullOutput;
+				if (details.fullOutput.length > 4000) {
+					output = details.fullOutput.slice(0, 4000) + "\n... [truncated]";
+				}
 				return new Text(header + "\n" + theme.fg("muted", output), 0, 0);
 			}
 
