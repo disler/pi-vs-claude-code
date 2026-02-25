@@ -3,13 +3,12 @@
  *
  * Prompts for confirmation before:
  * - running potentially dangerous bash commands
- * - always requiring confirmation for edit
- * - requiring confirmation for write outside cwd
+ * - requiring confirmation for edit
+ * - requiring confirmation for write
  *
  * Bash patterns checked: rm -rf, sudo, chmod/chown 777
  */
 
-import path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 const DANGEROUS_BASH_PATTERNS: RegExp[] = [
@@ -86,14 +85,10 @@ async function handleWriteToolCall(
 		};
 	}
 
-	if (isWithinCwd(ctx.cwd, targetPath)) {
-		return undefined;
-	}
-
 	if (!ctx.hasUI) {
 		return {
 			block: true,
-			reason: "write blocked outside cwd (no UI for confirmation)",
+			reason: "write blocked (no UI for confirmation)",
 		};
 	}
 
@@ -142,13 +137,6 @@ async function requestApproval(ctx: any, prompt: string): Promise<boolean> {
 function getTargetPath(input: Record<string, unknown>): string | undefined {
 	const raw = input.path;
 	return typeof raw === "string" && raw.trim().length > 0 ? raw : undefined;
-}
-
-function isWithinCwd(cwd: string, targetPath: string): boolean {
-	const normalizedCwd = path.resolve(cwd);
-	const normalizedTarget = path.resolve(normalizedCwd, targetPath);
-	const relativePath = path.relative(normalizedCwd, normalizedTarget);
-	return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
 function formatToolInput(toolName: string, input: Record<string, unknown>): string {
