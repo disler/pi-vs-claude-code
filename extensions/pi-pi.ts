@@ -22,7 +22,7 @@ import { spawn } from "child_process";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
-import { scanAgentDirectory, type AgentDef, type ValidationWarning } from "./utils/agent-loader.ts";
+import { scanAgentDirectory, type AgentDef, type ValidationWarning, type CollisionWarning } from "./utils/agent-loader.ts";
 
 // ── Types ────────────────────────────────────────
 
@@ -67,20 +67,23 @@ export default function (pi: ExtensionAPI) {
 	const experts: Map<string, ExpertState> = new Map();
 	let gridCols = 3;
 	let widgetCtx: any;
+	let lastCollisions: CollisionWarning[] = [];
 
 	function loadExperts(cwd: string) {
 		// Pi Pi experts live in their own dedicated directory
 		const piPiDir = join(cwd, ".pi", "agents", "pi-pi");
 
 		experts.clear();
+		lastCollisions = [];
 
 		if (!existsSync(piPiDir)) return;
 
-		const validAgents = scanAgentDirectory(piPiDir, (_file, warning) => {
+		const { agents: validAgents, collisions } = scanAgentDirectory(piPiDir, (_file, warning) => {
 			if (warning.severity === "error") {
 				console.error(`[pi-pi] ${_file}: ${warning.message}`);
 			}
 		});
+		lastCollisions = collisions;
 
 		// Exclude the orchestrator itself from the expert list
 		validAgents.delete("pi-orchestrator");
@@ -557,6 +560,11 @@ Ask specific questions about what you need to BUILD. Each expert will return doc
 		widgetCtx = _ctx;
 
 		loadExperts(_ctx.cwd);
+
+		for (const c of lastCollisions) {
+			_ctx.ui.notify(`⚠️ Expert collision: "${c.name}" in ${c.duplicatePath} — already loaded from ${c.originalPath}`, "warning");
+		}
+
 		updateWidget();
 
 		const expertNames = Array.from(experts.values()).map(s => displayName(s.def.name)).join(", ");

@@ -24,7 +24,7 @@ import { spawn } from "child_process";
 import { readdirSync, readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
 import { join, resolve } from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
-import { scanAgentDirectory, type AgentDef as LoaderAgentDef, type ValidationWarning } from "./utils/agent-loader.ts";
+import { scanAgentDirectory, type AgentDef as LoaderAgentDef, type ValidationWarning, type CollisionWarning } from "./utils/agent-loader.ts";
 
 // ── Types ────────────────────────────────────────
 
@@ -82,6 +82,7 @@ export default function (pi: ExtensionAPI) {
 	let widgetCtx: any;
 	let sessionDir = "";
 	let contextWindow = 0;
+	let lastCollisions: CollisionWarning[] = [];
 
 	function loadAgents(cwd: string) {
 		// Create session storage dir
@@ -90,7 +91,7 @@ export default function (pi: ExtensionAPI) {
 			mkdirSync(sessionDir, { recursive: true });
 		}
 
-		// Load all agent definitions
+		// Load all agent definitions (recursive walk with collision detection)
 		const agentDirs = [
 			join(cwd, "agents"),
 			join(cwd, ".claude", "agents"),
@@ -99,13 +100,15 @@ export default function (pi: ExtensionAPI) {
 
 		const seen = new Set<string>();
 		allAgentDefs = [];
+		lastCollisions = [];
 
 		for (const dir of agentDirs) {
-			const agents = scanAgentDirectory(dir, (_file, warning) => {
+			const { agents, collisions } = scanAgentDirectory(dir, (_file, warning) => {
 				if (warning.severity === "error") {
 					console.error(`[agent-team] ${_file}: ${warning.message}`);
 				}
 			});
+			lastCollisions.push(...collisions);
 			for (const [key, def] of agents) {
 				if (!seen.has(key)) {
 					seen.add(key);
@@ -648,6 +651,10 @@ ${agentCatalog}`,
 		}
 
 		loadAgents(_ctx.cwd);
+
+		for (const c of lastCollisions) {
+			_ctx.ui.notify(`⚠️ Agent collision: "${c.name}" in ${c.duplicatePath} — already loaded from ${c.originalPath}`, "warning");
+		}
 
 		// Default to first team — use /agents-team to switch
 		const teamNames = Object.keys(teams);

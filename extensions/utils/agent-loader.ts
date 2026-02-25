@@ -14,8 +14,8 @@
  *   import { loadAgentFile, scanAgentDirectory, type AgentDef } from "./utils/agent-loader.ts";
  */
 
-import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join, resolve, basename } from "node:path";
+import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { join, resolve, basename, relative } from "node:path";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -36,6 +36,17 @@ export interface ValidationWarning {
 export interface LoadResult {
 	agent: AgentDef | null;
 	warnings: ValidationWarning[];
+}
+
+export interface CollisionWarning {
+	name: string;
+	duplicatePath: string;
+	originalPath: string;
+}
+
+export interface ScanResult {
+	agents: Map<string, AgentDef>;
+	collisions: CollisionWarning[];
 }
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -249,30 +260,47 @@ export function loadAgentFile(filePath: string): LoadResult {
 }
 
 /**
- * Scan a directory for agent .md files, validate each, and return valid agents.
+ * Scan a directory recursively for agent .md files, validate each, and return valid agents.
  *
- * @param dir        Directory to scan
+ * Walks nested subdirectories so agents can be organized:
+ *   agents/
+ *   ├── review_agents/
+ *   │   ├── code_reviewer.md
+ *   │   └── security_reviewer.md
+ *   └── build_agents/
+ *       └── ts_builder.md
+ *
+ * When duplicate agent names are found (case-insensitive), the first one wins
+ * and a CollisionWarning is recorded.
+ *
+ * @param dir        Directory to scan (recursively)
  * @param onWarning  Optional callback for each validation warning
- * @returns          Map of lowercase agent name → AgentDef (only valid agents)
+ * @returns          ScanResult with agents map and collision warnings
  */
 export function scanAgentDirectory(
 	dir: string,
 	onWarning?: (file: string, warning: ValidationWarning) => void,
-): Map<string, AgentDef> {
+): ScanResult {
 	const agents = new Map<string, AgentDef>();
+	const collisions: CollisionWarning[] = [];
 
-	if (!existsSync(dir)) return agents;
+	if (!existsSync(dir)) return { agents, collisions };
 
-	let files: string[];
+	let files: (string | Buffer)[];
 	try {
-		files = readdirSync(dir);
+		files = readdirSync(dir, { recursive: true });
 	} catch {
-		return agents;
+		return { agents, collisions };
 	}
 
 	for (const file of files) {
-		if (!file.endsWith(".md")) continue;
-		const fullPath = resolve(dir, file);
+		const rel = typeof file === "string" ? file : file.toString();
+		if (!rel.endsWith(".md")) continue;
+		const fullPath = resolve(dir, rel);
+
+		// Skip directories that happen to end in .md
+		try { if (!statSync(fullPath).isFile()) continue; } catch { continue; }
+
 		const result = loadAgentFile(fullPath);
 
 		if (onWarning) {
@@ -283,11 +311,17 @@ export function scanAgentDirectory(
 
 		if (result.agent) {
 			const key = result.agent.name.toLowerCase();
-			if (!agents.has(key)) {
+			if (agents.has(key)) {
+				collisions.push({
+					name: result.agent.name,
+					duplicatePath: fullPath,
+					originalPath: agents.get(key)!.file,
+				});
+			} else {
 				agents.set(key, result.agent);
 			}
 		}
 	}
 
-	return agents;
+	return { agents, collisions };
 }

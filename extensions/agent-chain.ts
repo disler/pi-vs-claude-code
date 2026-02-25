@@ -28,7 +28,7 @@ import { spawn } from "child_process";
 import { readFileSync, existsSync, readdirSync, mkdirSync, unlinkSync } from "fs";
 import { join, resolve } from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
-import { scanAgentDirectory, type AgentDef as LoaderAgentDef, type ValidationWarning } from "./utils/agent-loader.ts";
+import { scanAgentDirectory, type AgentDef as LoaderAgentDef, type ValidationWarning, type CollisionWarning } from "./utils/agent-loader.ts";
 
 // ── Types ────────────────────────────────────────
 
@@ -139,6 +139,7 @@ export default function (pi: ExtensionAPI) {
 	// Per-step state for the active chain
 	let stepStates: StepState[] = [];
 	let pendingReset = false;
+	let lastCollisions: CollisionWarning[] = [];
 
 	function loadChains(cwd: string) {
 		sessionDir = join(cwd, ".pi", "agent-sessions");
@@ -147,17 +148,19 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		allAgents = new Map<string, AgentDef>();
+		lastCollisions = [];
 		const agentDirs = [
 			join(cwd, "agents"),
 			join(cwd, ".claude", "agents"),
 			join(cwd, ".pi", "agents"),
 		];
 		for (const dir of agentDirs) {
-			const agents = scanAgentDirectory(dir, (_file, warning) => {
+			const { agents, collisions } = scanAgentDirectory(dir, (_file, warning) => {
 				if (warning.severity === "error") {
 					console.error(`[agent-chain] ${_file}: ${warning.message}`);
 				}
 			});
+			lastCollisions.push(...collisions);
 			for (const [key, def] of agents) {
 				if (!allAgents.has(key)) {
 					allAgents.set(key, def);
@@ -707,6 +710,10 @@ ${agentCatalog}
 
 		// Reload chains + clear agentSessions map (all agents start fresh)
 		loadChains(_ctx.cwd);
+
+		for (const c of lastCollisions) {
+			_ctx.ui.notify(`⚠️ Agent collision: "${c.name}" in ${c.duplicatePath} — already loaded from ${c.originalPath}`, "warning");
+		}
 
 		if (chains.length === 0) {
 			_ctx.ui.notify("No chains found in .pi/agents/agent-chain.yaml", "warning");

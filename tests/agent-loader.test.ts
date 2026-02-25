@@ -6,7 +6,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -20,6 +20,7 @@ import {
 	MAX_SYSTEM_PROMPT_LENGTH,
 	type AgentDef,
 	type ValidationWarning,
+	type CollisionWarning,
 } from "../extensions/utils/agent-loader.ts";
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -375,7 +376,7 @@ describe("scanAgentDirectory", () => {
 		writeAgent(dir, "scout.md", makeAgentMd({ name: "scout" }, "Scout body."));
 		writeAgent(dir, "builder.md", makeAgentMd({ name: "builder", tools: "read,write,edit,bash" }, "Builder body."));
 
-		const agents = scanAgentDirectory(dir);
+		const { agents } = scanAgentDirectory(dir);
 		assert.equal(agents.size, 2);
 		assert.ok(agents.has("scout"));
 		assert.ok(agents.has("builder"));
@@ -388,7 +389,7 @@ describe("scanAgentDirectory", () => {
 		writeAgent(dir, "good.md", makeAgentMd({ name: "good" }, "Good body."));
 		writeAgent(dir, "bad.md", makeAgentMd({ name: "bad name!" }, "Bad body."));
 
-		const agents = scanAgentDirectory(dir);
+		const { agents } = scanAgentDirectory(dir);
 		assert.equal(agents.size, 1);
 		assert.ok(agents.has("good"));
 
@@ -419,7 +420,7 @@ describe("scanAgentDirectory", () => {
 		writeAgent(dir, "agent-a.md", makeAgentMd({ name: "Scout" }, "First."));
 		writeAgent(dir, "agent-b.md", makeAgentMd({ name: "scout" }, "Second."));
 
-		const agents = scanAgentDirectory(dir);
+		const { agents } = scanAgentDirectory(dir);
 		assert.equal(agents.size, 1);
 		assert.equal(agents.get("scout")!.systemPrompt, "First.");
 
@@ -427,7 +428,7 @@ describe("scanAgentDirectory", () => {
 	});
 
 	it("returns empty map for non-existent directory", () => {
-		const agents = scanAgentDirectory("/nonexistent/path");
+		const { agents } = scanAgentDirectory("/nonexistent/path");
 		assert.equal(agents.size, 0);
 	});
 
@@ -437,8 +438,142 @@ describe("scanAgentDirectory", () => {
 		writeAgent(dir, "readme.txt", "not an agent");
 		writeAgent(dir, "config.json", "{}");
 
-		const agents = scanAgentDirectory(dir);
+		const { agents } = scanAgentDirectory(dir);
 		assert.equal(agents.size, 1);
+
+		rmSync(dir, { recursive: true });
+	});
+});
+
+// ── scanAgentDirectory — recursive + collisions ────────────────────────
+
+describe("scanAgentDirectory (recursive)", () => {
+	it("finds agents in nested subdirectories", () => {
+		const dir = tmpDir();
+		mkdirSync(join(dir, "review_agents"), { recursive: true });
+		mkdirSync(join(dir, "build_agents"), { recursive: true });
+
+		writeAgent(dir, "top-level.md", makeAgentMd({ name: "top-level" }, "Top."));
+		writeAgent(join(dir, "review_agents"), "code-reviewer.md", makeAgentMd({ name: "code-reviewer" }, "Reviews code."));
+		writeAgent(join(dir, "review_agents"), "security-reviewer.md", makeAgentMd({ name: "security-reviewer" }, "Reviews security."));
+		writeAgent(join(dir, "build_agents"), "ts-builder.md", makeAgentMd({ name: "ts-builder", tools: "read,write,bash" }, "Builds TS."));
+
+		const { agents, collisions } = scanAgentDirectory(dir);
+
+		assert.equal(agents.size, 4);
+		assert.ok(agents.has("top-level"));
+		assert.ok(agents.has("code-reviewer"));
+		assert.ok(agents.has("security-reviewer"));
+		assert.ok(agents.has("ts-builder"));
+		assert.equal(collisions.length, 0);
+
+		rmSync(dir, { recursive: true });
+	});
+
+	it("finds agents in deeply nested directories", () => {
+		const dir = tmpDir();
+		const deep = join(dir, "a", "b", "c");
+		mkdirSync(deep, { recursive: true });
+
+		writeAgent(deep, "deep-agent.md", makeAgentMd({ name: "deep-agent" }, "Deep."));
+
+		const { agents } = scanAgentDirectory(dir);
+		assert.equal(agents.size, 1);
+		assert.ok(agents.has("deep-agent"));
+
+		rmSync(dir, { recursive: true });
+	});
+
+	it("reports collisions for duplicate names across subdirs", () => {
+		const dir = tmpDir();
+		mkdirSync(join(dir, "team-a"), { recursive: true });
+		mkdirSync(join(dir, "team-b"), { recursive: true });
+
+		writeAgent(dir, "scout.md", makeAgentMd({ name: "scout" }, "Original."));
+		writeAgent(join(dir, "team-a"), "scout-copy.md", makeAgentMd({ name: "scout" }, "Duplicate A."));
+		writeAgent(join(dir, "team-b"), "another-scout.md", makeAgentMd({ name: "Scout" }, "Duplicate B."));
+
+		const { agents, collisions } = scanAgentDirectory(dir);
+
+		// First wins
+		assert.equal(agents.size, 1);
+		assert.equal(agents.get("scout")!.systemPrompt, "Original.");
+
+		// Two collisions reported
+		assert.equal(collisions.length, 2);
+		assert.ok(collisions.every((c) => c.name.toLowerCase() === "scout"));
+		// Each collision has the paths
+		for (const c of collisions) {
+			assert.ok(c.duplicatePath.length > 0);
+			assert.ok(c.originalPath.length > 0);
+			assert.notEqual(c.duplicatePath, c.originalPath);
+		}
+
+		rmSync(dir, { recursive: true });
+	});
+
+	it("returns zero collisions when all names are unique", () => {
+		const dir = tmpDir();
+		mkdirSync(join(dir, "sub"), { recursive: true });
+
+		writeAgent(dir, "alpha.md", makeAgentMd({ name: "alpha" }, "A."));
+		writeAgent(join(dir, "sub"), "beta.md", makeAgentMd({ name: "beta" }, "B."));
+
+		const { agents, collisions } = scanAgentDirectory(dir);
+		assert.equal(agents.size, 2);
+		assert.equal(collisions.length, 0);
+
+		rmSync(dir, { recursive: true });
+	});
+
+	it("skips .md files without valid frontmatter in subdirs", () => {
+		const dir = tmpDir();
+		mkdirSync(join(dir, "docs"), { recursive: true });
+
+		writeAgent(dir, "valid.md", makeAgentMd({ name: "valid" }, "Valid."));
+		writeAgent(join(dir, "docs"), "README.md", "# Just a readme\nNo frontmatter here.");
+		writeAgent(join(dir, "docs"), "CHANGELOG.md", "# Changes\n- stuff");
+
+		const { agents } = scanAgentDirectory(dir);
+		assert.equal(agents.size, 1);
+		assert.ok(agents.has("valid"));
+
+		rmSync(dir, { recursive: true });
+	});
+
+	it("mixes flat and nested agents correctly", () => {
+		const dir = tmpDir();
+		mkdirSync(join(dir, "specialists"), { recursive: true });
+
+		writeAgent(dir, "scout.md", makeAgentMd({ name: "scout" }, "Flat scout."));
+		writeAgent(dir, "builder.md", makeAgentMd({ name: "builder", tools: "read,write,edit,bash" }, "Flat builder."));
+		writeAgent(join(dir, "specialists"), "reviewer.md", makeAgentMd({ name: "reviewer" }, "Nested reviewer."));
+		writeAgent(join(dir, "specialists"), "documenter.md", makeAgentMd({ name: "documenter" }, "Nested documenter."));
+
+		const { agents, collisions } = scanAgentDirectory(dir);
+		assert.equal(agents.size, 4);
+		assert.equal(collisions.length, 0);
+
+		// Verify all loaded
+		for (const name of ["scout", "builder", "reviewer", "documenter"]) {
+			assert.ok(agents.has(name), `expected agent "${name}" to be loaded`);
+		}
+
+		rmSync(dir, { recursive: true });
+	});
+
+	it("collision paths are absolute and point to real files", () => {
+		const dir = tmpDir();
+		mkdirSync(join(dir, "sub"), { recursive: true });
+
+		const origPath = writeAgent(dir, "agent.md", makeAgentMd({ name: "dupe" }, "First."));
+		const dupePath = writeAgent(join(dir, "sub"), "agent-copy.md", makeAgentMd({ name: "dupe" }, "Second."));
+
+		const { collisions } = scanAgentDirectory(dir);
+		assert.equal(collisions.length, 1);
+		assert.equal(collisions[0].name, "dupe");
+		assert.ok(existsSync(collisions[0].originalPath), "original path should exist on disk");
+		assert.ok(existsSync(collisions[0].duplicatePath), "duplicate path should exist on disk");
 
 		rmSync(dir, { recursive: true });
 	});
