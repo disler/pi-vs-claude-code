@@ -30,76 +30,54 @@ const DANGEROUS_BASH_PATTERNS: RegExp[] = [
 ];
 
 const TOGGLE_EDIT_MODE_SHORTCUT = "ctrl+shift+e";
+const MODE_OPTIONS = ["guarded", "auto-edit", "cancel"] as const;
+const MODIFY_PERMISSION_OPTIONS = [
+	"Allow once",
+	"Always allow this file (session)",
+	"Deny",
+] as const;
 
 type BlockResult = { block: true; reason: string };
 type PermissionMode = "guarded" | "auto-edit";
+type ModifyToolName = "write" | "edit";
 
-type ModifyPermissionChoice =
-	| "Allow once"
-	| "Always allow this file (session)"
-	| "Deny";
+type ModifyPermissionChoice = (typeof MODIFY_PERMISSION_OPTIONS)[number];
 
 export default function permissionGateExtension(pi: ExtensionAPI): void {
 	const allowedModifyPaths = new Set<string>();
 	let mode: PermissionMode = "guarded";
 
-	const resetSessionState = () => {
-		allowedModifyPaths.clear();
-		mode = "guarded";
-	};
-
-	const updateModeUI = (ctx: ExtensionContext) => {
-		if (!ctx.hasUI) return;
-		const modeLabel = mode === "auto-edit" ? "AUTO-EDIT" : "GUARDED";
-		const detail =
-			mode === "auto-edit"
-				? "edit is pre-approved"
-				: "write/edit require confirmation";
-		ctx.ui.setStatus("perm-gate", `🔐 ${modeLabel} · ${detail} · ${TOGGLE_EDIT_MODE_SHORTCUT}`);
-	};
-
-	const setMode = (next: PermissionMode, ctx: ExtensionContext) => {
-		mode = next;
-		updateModeUI(ctx);
-		if (ctx.hasUI) {
-			ctx.ui.notify(
-				mode === "auto-edit"
-					? "permission-gate: AUTO-EDIT enabled (edit tool calls are pre-approved)"
-					: "permission-gate: GUARDED mode enabled",
-				"info",
-			);
-		}
-	};
-
-	pi.on("session_start", async (_event, ctx) => {
-		updateModeUI(ctx);
+	pi.on("session_start", async function onSessionStart(_event, ctx) {
+		updateModeUI(ctx, mode);
 	});
 
-	pi.on("session_switch", async (_event, ctx) => {
+	pi.on("session_switch", async function onSessionSwitch(_event, ctx) {
 		resetSessionState();
-		updateModeUI(ctx);
+		updateModeUI(ctx, mode);
 	});
 
 	pi.registerShortcut(TOGGLE_EDIT_MODE_SHORTCUT, {
 		description: "Toggle permission-gate edit auto-approve mode",
-		handler: async (ctx) => {
-			setMode(mode === "guarded" ? "auto-edit" : "guarded", ctx);
+		handler: async function onToggleShortcut(ctx) {
+			setMode(toggleMode(mode), ctx);
 		},
 	});
 
 	pi.registerCommand("perm-mode", {
 		description: "Permission mode: /perm-mode [guarded|auto-edit|toggle|status]",
-		handler: async (args, ctx) => {
+		handler: async function onPermModeCommand(args, ctx) {
 			const arg = args.trim().toLowerCase();
 
-			if (!arg || arg === "status") {
-				updateModeUI(ctx);
-				if (ctx.hasUI) ctx.ui.notify(`permission-gate mode: ${mode}`, "info");
+			if (arg.length === 0 || arg === "status") {
+				updateModeUI(ctx, mode);
+				if (ctx.hasUI) {
+					ctx.ui.notify(`permission-gate mode: ${mode}`, "info");
+				}
 				return;
 			}
 
 			if (arg === "toggle") {
-				setMode(mode === "guarded" ? "auto-edit" : "guarded", ctx);
+				setMode(toggleMode(mode), ctx);
 				return;
 			}
 
@@ -108,16 +86,20 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			if (ctx.hasUI) {
-				const pick = await ctx.ui.select("Set permission mode", ["guarded", "auto-edit", "cancel"]);
-				if (pick === "guarded" || pick === "auto-edit") setMode(pick, ctx);
+			if (!ctx.hasUI) {
+				return;
+			}
+
+			const pick = await ctx.ui.select("Set permission mode", [...MODE_OPTIONS]);
+			if (pick === "guarded" || pick === "auto-edit") {
+				setMode(pick, ctx);
 			}
 		},
 	});
 
 	pi.registerCommand("perm-clear", {
 		description: "Clear write/edit file approvals saved by permission-gate",
-		handler: async (_args, ctx) => {
+		handler: async function onPermClear(_args, ctx) {
 			allowedModifyPaths.clear();
 			if (ctx.hasUI) {
 				ctx.ui.notify("permission-gate: cleared saved file approvals", "info");
@@ -125,7 +107,7 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.on("tool_call", async (event, ctx) => {
+	pi.on("tool_call", async function onToolCall(event, ctx) {
 		if (isToolCallEventType("bash", event)) {
 			return handleBashToolCall(event.input.command ?? "", ctx);
 		}
@@ -140,14 +122,34 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 
 		return undefined;
 	});
+
+	function resetSessionState(): void {
+		allowedModifyPaths.clear();
+		mode = "guarded";
+	}
+
+	function setMode(nextMode: PermissionMode, ctx: ExtensionContext): void {
+		mode = nextMode;
+		updateModeUI(ctx, mode);
+
+		if (!ctx.hasUI) {
+			return;
+		}
+
+		ctx.ui.notify(getModeNotification(mode), "info");
+	}
 }
 
 async function handleBashToolCall(
 	command: string,
 	ctx: ExtensionContext,
 ): Promise<BlockResult | undefined> {
-	const isDangerous = DANGEROUS_BASH_PATTERNS.some((pattern) => pattern.test(command));
-	if (!isDangerous) return undefined;
+	const isDangerous = DANGEROUS_BASH_PATTERNS.some(function matchesPattern(pattern) {
+		return pattern.test(command);
+	});
+	if (!isDangerous) {
+		return undefined;
+	}
 
 	if (!ctx.hasUI) {
 		return {
@@ -157,13 +159,15 @@ async function handleBashToolCall(
 	}
 
 	const approved = await confirmYesNo(ctx, `⚠️ Dangerous bash command:\n\n  ${command}\n\nAllow?`);
-	if (!approved) return { block: true, reason: "Blocked by user" };
+	if (!approved) {
+		return { block: true, reason: "Blocked by user" };
+	}
 
 	return undefined;
 }
 
 async function handleModifyToolCall(
-	toolName: "write" | "edit",
+	toolName: ModifyToolName,
 	rawPath: string,
 	ctx: ExtensionContext,
 	allowedModifyPaths: Set<string>,
@@ -193,7 +197,10 @@ async function handleModifyToolCall(
 	}
 
 	const choice = await requestModifyPermission(ctx, toolName, targetPath);
-	if (choice === "Allow once") return undefined;
+	if (choice === "Allow once") {
+		return undefined;
+	}
+
 	if (choice === "Always allow this file (session)") {
 		allowedModifyPaths.add(targetPath);
 		ctx.ui.notify(`permission-gate: auto-allow enabled for ${targetPath}`, "info");
@@ -210,22 +217,61 @@ async function confirmYesNo(ctx: ExtensionContext, prompt: string): Promise<bool
 
 async function requestModifyPermission(
 	ctx: ExtensionContext,
-	toolName: "write" | "edit",
+	toolName: ModifyToolName,
 	targetPath: string,
 ): Promise<ModifyPermissionChoice> {
 	const prompt = `🔐 ${toolName} permission request\n\nPath: ${targetPath}`;
-	const options: ModifyPermissionChoice[] = [
-		"Allow once",
-		"Always allow this file (session)",
-		"Deny",
-	];
-
-	const choice = await ctx.ui.select(prompt, options);
+	const choice = await ctx.ui.select(prompt, [...MODIFY_PERMISSION_OPTIONS]);
 	return (choice as ModifyPermissionChoice | undefined) ?? "Deny";
 }
 
+function updateModeUI(ctx: ExtensionContext, mode: PermissionMode): void {
+	if (!ctx.hasUI) {
+		return;
+	}
+
+	const modeLabel = getModeLabel(mode);
+	const detail = getModeDetail(mode);
+	ctx.ui.setStatus("perm-gate", `🔐 ${modeLabel} · ${detail} · ${TOGGLE_EDIT_MODE_SHORTCUT}`);
+}
+
+function getModeLabel(mode: PermissionMode): string {
+	if (mode === "auto-edit") {
+		return "AUTO-EDIT";
+	}
+
+	return "GUARDED";
+}
+
+function getModeDetail(mode: PermissionMode): string {
+	if (mode === "auto-edit") {
+		return "edit is pre-approved";
+	}
+
+	return "write/edit require confirmation";
+}
+
+function getModeNotification(mode: PermissionMode): string {
+	if (mode === "auto-edit") {
+		return "permission-gate: AUTO-EDIT enabled (edit tool calls are pre-approved)";
+	}
+
+	return "permission-gate: GUARDED mode enabled";
+}
+
+function toggleMode(mode: PermissionMode): PermissionMode {
+	if (mode === "guarded") {
+		return "auto-edit";
+	}
+
+	return "guarded";
+}
+
 function normalizePath(rawPath: string | undefined, cwd: string): string | undefined {
-	if (!rawPath || rawPath.trim().length === 0) return undefined;
+	if (!rawPath || rawPath.trim().length === 0) {
+		return undefined;
+	}
+
 	const withoutAt = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
 	return path.resolve(cwd, withoutAt);
 }
