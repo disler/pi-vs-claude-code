@@ -1,6 +1,6 @@
 # pi-vs-cc
 
-A collection of [Pi Coding Agent](https://github.com/mariozechner/pi-coding-agent) customized instances. _Why?_ To showcase what it looks like to hedge against the leader in the agentic coding market, Claude Code. Here we showcase how you can customize the UI, agent orchestration tools, safety auditing, and cross-agent integrations. 
+A collection of [Pi Coding Agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) customized instances. _Why?_ To showcase what it looks like to hedge against the leader in the agentic coding market, Claude Code. Here we showcase how you can customize the UI, agent orchestration tools, safety auditing, and cross-agent integrations. 
 
 <div align="center">
   <img src="./images/pi-logo.png" alt="pi-vs-cc" width="700">
@@ -16,7 +16,7 @@ All three are required:
 | --------------- | ------------------------- | ---------------------------------------------------------- |
 | **Bun** ≥ 1.3.2 | Runtime & package manager | [bun.sh](https://bun.sh)                                   |
 | **just**        | Task runner               | `brew install just`                                        |
-| **pi**          | Pi Coding Agent CLI       | [Pi docs](https://github.com/mariozechner/pi-coding-agent) |
+| **pi**          | Pi Coding Agent CLI       | [Pi docs](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) |
 
 ---
 
