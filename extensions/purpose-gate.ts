@@ -9,27 +9,9 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text, truncateToWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth } from "@mariozechner/pi-tui";
 import { applyExtensionDefaults } from "./themeMap.ts";
 
-// synthwave: bgWarm #4a1e6a → rgb(74,30,106)
-function bg(s: string): string {
-	return `\x1b[48;2;74;30;106m${s}\x1b[49m`;
-}
-
-// synthwave: pink #ff7edb
-function pink(s: string): string {
-	return `\x1b[38;2;255;126;219m${s}\x1b[39m`;
-}
-
-// synthwave: cyan #36f9f6
-function cyan(s: string): string {
-	return `\x1b[38;2;54;249;246m${s}\x1b[39m`;
-}
-
-function bold(s: string): string {
-	return `\x1b[1m${s}\x1b[22m`;
-}
 
 export default function (pi: ExtensionAPI) {
 	let purpose: string | undefined;
@@ -48,13 +30,16 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		ctx.ui.setWidget("purpose", () => {
+		ctx.ui.setWidget("purpose", (_tui, theme) => {
 			return {
 				render(width: number): string[] {
-					const pad = bg(" ".repeat(width));
-					const label = pink(bold("  PURPOSE: "));
-					const msg = cyan(bold(purpose!));
-					const content = bg(truncateToWidth(label + msg + " ".repeat(width), width, ""));
+					const pad = theme.bg("selectedBg", " ".repeat(width));
+					const label = theme.fg("accent", theme.bold("  PURPOSE: "));
+					const msg = theme.fg("muted", theme.bold(purpose!));
+					const content = theme.bg(
+						"selectedBg",
+						truncateToWidth(label + msg + " ".repeat(width), width, ""),
+					);
 					return [pad, content, pad];
 				},
 				invalidate() {},

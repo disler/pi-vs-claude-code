@@ -1,42 +1,32 @@
 /**
- * themeMap.ts — Per-extension default theme assignments
+ * themeMap.ts — Centralized extension startup defaults (theme + title)
  *
- * Themes live in .pi/themes/ and are mapped by extension filename (no extension).
- * Each extension calls applyExtensionTheme(import.meta.url, ctx) in its session_start
- * hook to automatically load its designated theme on boot.
+ * Theme selection is global and mode-driven (not per-extension):
+ *   PI_THEME_MODE=light -> built-in "light" theme
+ *   PI_THEME_MODE=dark  -> built-in "dark" theme
  *
- * Available themes (.pi/themes/):
- *   catppuccin-mocha · cyberpunk · dracula · everforest · gruvbox
- *   midnight-ocean   · nord      · ocean-breeze · rose-pine
- *   synthwave        · tokyo-night
+ * If PI_THEME_MODE is missing or invalid, light mode is used.
  */
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { basename } from "path";
 import { fileURLToPath } from "url";
 
-// ── Theme assignments ──────────────────────────────────────────────────────
-//
-// Key   = extension filename without extension (matches extensions/<key>.ts)
-// Value = theme name from .pi/themes/<value>.json
-//
-export const THEME_MAP: Record<string, string> = {
-	"agent-chain":        "midnight-ocean",   // deep sequential pipeline
-	"agent-team":         "dracula",          // rich orchestration palette
-	"cross-agent":        "ocean-breeze",     // cross-boundary, connecting
-	"damage-control":     "gruvbox",          // grounded, earthy safety
-	"minimal":            "synthwave",        // synthwave by default now!
-	"pi-pi":              "rose-pine",        // warm creative meta-agent
-	"pure-focus":         "everforest",       // calm, distraction-free
-	"purpose-gate":       "tokyo-night",      // intentional, sharp focus
-	"session-replay":     "catppuccin-mocha", // soft, reflective history
-	"subagent-widget":    "cyberpunk",        // multi-agent futuristic
-	"system-select":      "catppuccin-mocha", // soft selection UI
-	"theme-cycler":       "synthwave",        // neon, it's a theme tool
-	"tilldone":           "everforest",       // task-focused calm
-	"tool-counter":       "synthwave",        // techy metrics
-	"tool-counter-widget":"synthwave",        // same family
+type ThemeMode = "light" | "dark";
+
+const THEME_NAME_BY_MODE: Record<ThemeMode, string> = {
+  light: "light",
+  dark: "dark",
 };
+
+function resolveThemeMode(rawMode = process.env.PI_THEME_MODE): ThemeMode {
+  const normalizedMode = rawMode?.trim().toLowerCase();
+  return normalizedMode === "dark" ? "dark" : "light";
+}
+
+function resolveThemeName(): string {
+  return THEME_NAME_BY_MODE[resolveThemeMode()];
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -49,7 +39,7 @@ function extensionName(fileUrl: string): string {
 // ── Theme ──────────────────────────────────────────────────────────────────
 
 /**
- * Apply the mapped theme for an extension on session boot.
+ * Apply the globally resolved light/dark theme for extension session boot.
  *
  * @param fileUrl   Pass `import.meta.url` from the calling extension file.
  * @param ctx       The ExtensionContext from the session_start handler.
@@ -60,9 +50,8 @@ export function applyExtensionTheme(fileUrl: string, ctx: ExtensionContext): boo
 
 	const name = extensionName(fileUrl);
 	
-	// If there are multiple extensions stacked in 'ipi', they each fire session_start
-	// and try to apply their own mapped theme. The LAST one to fire wins.
-	// Since system-select is last in the ipi alias array, it was setting 'catppuccin-mocha'.
+	// If multiple extensions are stacked in 'ipi', each fires session_start
+	// and attempts to apply theme defaults. The LAST one to fire would win.
 	
 	// We want to skip theme application for all secondary extensions if they are stacked,
 	// so the primary extension (first in the array) dictates the theme.
@@ -71,16 +60,12 @@ export function applyExtensionTheme(fileUrl: string, ctx: ExtensionContext): boo
 		return true; // Pretend we succeeded, but don't overwrite the primary theme
 	}
 
-	let themeName = THEME_MAP[name];
-	
-	if (!themeName) {
-		themeName = "synthwave";
-	}
+	const themeName = resolveThemeName();
 
 	const result = ctx.ui.setTheme(themeName);
-	
-	if (!result.success && themeName !== "synthwave") {
-		return ctx.ui.setTheme("synthwave").success;
+
+	if (!result.success && themeName !== "light") {
+		return ctx.ui.setTheme("light").success;
 	}
 	
 	return result.success;
@@ -126,8 +111,8 @@ function applyExtensionTitle(ctx: ExtensionContext): void {
 // ── Combined default ───────────────────────────────────────────────────────
 
 /**
- * Apply both the mapped theme AND the terminal title for an extension.
- * Drop-in replacement for applyExtensionTheme — call this in every session_start.
+ * Apply both the resolved global mode theme AND the terminal title for an extension.
+ * Call this in every session_start.
  *
  * Usage:
  *   import { applyExtensionDefaults } from "./themeMap.ts";

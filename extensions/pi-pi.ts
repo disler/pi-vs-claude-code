@@ -77,22 +77,29 @@ function parseAgentFile(filePath: string): ExpertDef | null {
 	}
 }
 
-// ── Expert card colors ────────────────────────────
-// Each expert gets a unique hue: bg fills the card interior,
-// br is the matching border foreground (brighter shade of same hue).
-const EXPERT_COLORS: Record<string, { bg: string; br: string }> = {
-	"agent-expert":      { bg: "\x1b[48;2;20;30;75m",  br: "\x1b[38;2;70;110;210m"  }, // navy
-	"config-expert":     { bg: "\x1b[48;2;18;65;30m",  br: "\x1b[38;2;55;175;90m"   }, // forest
-	"ext-expert":        { bg: "\x1b[48;2;80;18;28m",  br: "\x1b[38;2;210;65;85m"   }, // crimson
-	"keybinding-expert": { bg: "\x1b[48;2;50;22;85m",  br: "\x1b[38;2;145;80;220m"  }, // violet
-	"prompt-expert":     { bg: "\x1b[48;2;80;55;12m",  br: "\x1b[38;2;215;150;40m"  }, // amber
-	"skill-expert":      { bg: "\x1b[48;2;12;65;75m",  br: "\x1b[38;2;40;175;195m"  }, // teal
-	"theme-expert":      { bg: "\x1b[48;2;80;18;62m",  br: "\x1b[38;2;210;55;160m"  }, // rose
-	"tui-expert":        { bg: "\x1b[48;2;28;42;80m",  br: "\x1b[38;2;85;120;210m"  }, // slate
-	"cli-expert":        { bg: "\x1b[48;2;60;80;20m",  br: "\x1b[38;2;160;210;55m"  }, // olive/lime
+// ── Expert card tones ─────────────────────────────
+// Border and fill are theme-token based so cards adapt cleanly to light/dark.
+interface ExpertCardTone {
+  border: "accent" | "success" | "warning" | "error" | "muted" | "toolTitle" | "dim";
+  fill: "selectedBg";
+}
+
+const DEFAULT_EXPERT_CARD_TONE: ExpertCardTone = {
+  border: "dim",
+  fill: "selectedBg",
 };
-const FG_RESET = "\x1b[39m";
-const BG_RESET = "\x1b[49m";
+
+const EXPERT_CARD_TONES: Record<string, ExpertCardTone> = {
+  "agent-expert":      { border: "accent", fill: "selectedBg" },
+  "config-expert":     { border: "success", fill: "selectedBg" },
+  "ext-expert":        { border: "error", fill: "selectedBg" },
+  "keybinding-expert": { border: "warning", fill: "selectedBg" },
+  "prompt-expert":     { border: "toolTitle", fill: "selectedBg" },
+  "skill-expert":      { border: "accent", fill: "selectedBg" },
+  "theme-expert":      { border: "warning", fill: "selectedBg" },
+  "tui-expert":        { border: "muted", fill: "selectedBg" },
+  "cli-expert":        { border: "success", fill: "selectedBg" },
+};
 
 // ── Extension ────────────────────────────────────
 
@@ -164,33 +171,26 @@ export default function (pi: ExtensionAPI) {
 		const lastLineRendered = lastText ? theme.fg("dim", lastText) : theme.fg("dim", "—");
 		const lastVisible = lastText ? lastText.length : 1;
 
-		const colors = EXPERT_COLORS[state.def.name];
-		const bg  = colors?.bg ?? "";
-		const br  = colors?.br ?? "";
-		const bgr = bg ? BG_RESET : "";
-		const fgr = br ? FG_RESET : "";
+		const tone = EXPERT_CARD_TONES[state.def.name] ?? DEFAULT_EXPERT_CARD_TONE;
 
-		// br colors the box-drawing characters; bg fills behind them so the
-		// full card — top line, side bars, bottom line — is one solid block.
-		const bord = (s: string) => bg + br + s + bgr + fgr;
+		const borderGlyph = (s: string) =>
+			theme.bg(tone.fill, theme.fg(tone.border, s));
 
 		const top = "┌" + "─".repeat(w) + "┐";
 		const bot = "└" + "─".repeat(w) + "┘";
 
-		// bg fills the inner content area; re-applied before padding to ensure
-		// the full row is colored even if theme.fg uses a full ANSI reset inside.
 		const border = (content: string, visLen: number) => {
 			const pad = " ".repeat(Math.max(0, w - visLen));
-			return bord("│") + bg + content + bg + pad + bgr + bord("│");
+			return borderGlyph("│") + theme.bg(tone.fill, content + pad) + borderGlyph("│");
 		};
 
 		return [
-			bord(top),
+			borderGlyph(top),
 			border(" " + nameStr, 1 + nameVisible),
 			border(" " + statusLine, 1 + statusVisible),
 			border(" " + workLine, 1 + workVisible),
 			border(" " + lastLineRendered, 1 + lastVisible),
-			bord(bot),
+			borderGlyph(bot),
 		];
 	}
 

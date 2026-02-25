@@ -12,5 +12,5 @@ Orient yourself in pi-vs-cc — a collection of Pi coding agent extensions and a
 2. Read `justfile`, `THEME.md`
 3. Read `extensions/*`
 4. Read `.pi/agents/*`
-5. Read `.pi/settings.json`, `.pi/themes/synthwave.json`
+5. Read `.pi/settings.json`, `extensions/themeMap.ts` (theme defaults + light/dark mode resolution)
 6. Summarize your understanding of the project: purpose, stack, structure, key files, and entry points

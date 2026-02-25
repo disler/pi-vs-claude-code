@@ -138,6 +138,24 @@ just ext-theme-cycler       # Theme cycler + minimal footer
 just all                    # Open every extension in its own terminal window
 ```
 
+
+Canonical theme switching (recommended):
+
+```bash
+just theme-light pi               # Launch plain Pi in light mode
+just theme-dark pi                # Launch plain Pi in dark mode
+just theme-light ext-minimal      # Launch a recipe in light mode
+just theme-dark ext-cross-agent   # Launch a recipe in dark mode
+```
+
+These `theme-light` / `theme-dark` wrappers are the canonical way to switch modes. They set `PI_THEME_MODE` centrally for the invoked recipe(s).
+
+For one-off overrides without wrappers, you can still set the env var directly:
+
+```bash
+PI_THEME_MODE=dark just ext-pi-pi
+```
+
 The `open` recipe allows you to spin up a new terminal window with any combination of stacked extensions (omit `.ts`):
 
 ```bash

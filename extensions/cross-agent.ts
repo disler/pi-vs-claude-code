@@ -14,30 +14,8 @@ import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { applyExtensionDefaults } from "./themeMap.ts";
-import { wrapTextWithAnsi, visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, wrapTextWithAnsi, visibleWidth } from "@mariozechner/pi-tui";
 
-// --- Synthwave palette ---
-function bg(s: string): string {
-	return `\x1b[48;2;52;20;58m${s}\x1b[49m`;
-}
-function pink(s: string): string {
-	return `\x1b[38;2;255;126;219m${s}\x1b[39m`;
-}
-function cyan(s: string): string {
-	return `\x1b[38;2;54;249;246m${s}\x1b[39m`;
-}
-function green(s: string): string {
-	return `\x1b[38;2;114;241;184m${s}\x1b[39m`;
-}
-function yellow(s: string): string {
-	return `\x1b[38;2;254;222;93m${s}\x1b[39m`;
-}
-function dim(s: string): string {
-	return `\x1b[38;2;120;100;140m${s}\x1b[39m`;
-}
-function bold(s: string): string {
-	return `\x1b[1m${s}\x1b[22m`;
-}
 
 interface Discovered {
 	name: string;
@@ -130,8 +108,22 @@ function scanAgents(dir: string): Discovered[] {
 }
 
 export default function (pi: ExtensionAPI) {
+	const SUMMARY_WIDGET_KEY = "cross-agent-summary";
+	let summaryClearTimer: ReturnType<typeof setTimeout> | undefined;
+	let summarySetupTimer: ReturnType<typeof setTimeout> | undefined;
 	pi.on("session_start", async (_event, ctx) => {
 		applyExtensionDefaults(import.meta.url, ctx);
+		if (summaryClearTimer) {
+			clearTimeout(summaryClearTimer);
+			summaryClearTimer = undefined;
+		}
+		if (summarySetupTimer) {
+			clearTimeout(summarySetupTimer);
+			summarySetupTimer = undefined;
+		}
+		if (ctx.hasUI) {
+			ctx.ui.setWidget(SUMMARY_WIDGET_KEY, undefined);
+		}
 		const home = homedir();
 		const cwd = ctx.cwd;
 		const providers = ["claude", "gemini", "codex"];
@@ -158,20 +150,13 @@ export default function (pi: ExtensionAPI) {
 			groups.push({ source: ".pi/agents", commands: [], skills: [], agents: localAgents });
 		}
 
-		// Register commands
+		// Register commands (first definition wins across providers)
 		const seenCmds = new Set<string>();
-		let totalCommands = 0;
-		let totalSkills = 0;
-		let totalAgents = 0;
 
 		for (const g of groups) {
-			totalSkills += g.skills.length;
-			totalAgents += g.agents.length;
-			
 			for (const cmd of g.commands) {
 				if (seenCmds.has(cmd.name)) continue;
 				seenCmds.add(cmd.name);
-				totalCommands++;
 				pi.registerCommand(cmd.name, {
 					description: `[${g.source}] ${cmd.description}`.slice(0, 120),
 					handler: async (args) => {
@@ -183,83 +168,119 @@ export default function (pi: ExtensionAPI) {
 
 		if (groups.length === 0) return;
 
-				// We delay slightly so it doesn't get instantly overwritten by system-select's default startup notify
-						setTimeout(() => {
-			if (!ctx.hasUI) return;
-			// Reduce max width slightly to ensure it never overflows and breaks the next line
-			const width = Math.min((process.stdout.columns || 80) - 4, 100); 
-			const pad = bg(" ".repeat(width));
-			const lines: string[] = [];
+		if (!ctx.hasUI) return;
+		// Delay slightly so startup summaries aren't immediately overwritten by other notices
+		summarySetupTimer = setTimeout(() => {
+			summarySetupTimer = undefined;
 
-			lines.push(""); // space from prev
-			
-			for (let i = 0; i < groups.length; i++) {
-				const g = groups[i];
 
-				// Title with counts
-				const counts: string[] = [];
-				if (g.skills.length) counts.push(yellow("(") + green(`${g.skills.length}`) + dim(` skill${g.skills.length > 1 ? "s" : ""}`) + yellow(")"));
-				if (g.commands.length) counts.push(yellow("(") + green(`${g.commands.length}`) + dim(` command${g.commands.length > 1 ? "s" : ""}`) + yellow(")"));
-				if (g.agents.length) counts.push(yellow("(") + green(`${g.agents.length}`) + dim(` agent${g.agents.length > 1 ? "s" : ""}`) + yellow(")"));
-				const countStr = counts.length ? "  " + counts.join(" ") : "";
-				lines.push(pink(bold(`  ${g.source}`)) + countStr);
+			ctx.ui.setWidget(SUMMARY_WIDGET_KEY, (_tui, theme) => {
+				return {
+					render(width: number): string[] {
+						const maxWidth = Math.max(1, Math.min(Math.max(width - 4, 1), 100));
+						const horizontalPadding = maxWidth >= 6 ? 2 : 0;
+						const sidePad = " ".repeat(horizontalPadding);
+						const pad = theme.bg("selectedBg", " ".repeat(maxWidth));
+						const lines: string[] = [""];
 
-				// Build body content
-				const items: string[] = [];
-				if (g.commands.length) {
-					items.push(
-						yellow("/") +
-						g.commands.map((c) => cyan(c.name)).join(yellow(", /"))
-					);
-				}
-				if (g.skills.length) {
-					items.push(
-						yellow("/skill:") +
-						g.skills.map((s) => cyan(s)).join(yellow(", /skill:"))
-					);
-				}
-				if (g.agents.length) {
-					items.push(
-						yellow("@") +
-						g.agents.map((a) => green(a.name)).join(yellow(", @"))
-					);
-				}
+						for (let i = 0; i < groups.length; i++) {
+							const g = groups[i];
 
-				const body = items.join("\n");
-				
-				// Top padding
-				lines.push(pad);
+							const counts: string[] = [];
+							if (g.skills.length) {
+								counts.push(
+									theme.fg("warning", "(") +
+									theme.fg("success", `${g.skills.length}`) +
+									theme.fg("dim", ` skill${g.skills.length > 1 ? "s" : ""}`) +
+									theme.fg("warning", ")"),
+								);
+							}
+							if (g.commands.length) {
+								counts.push(
+									theme.fg("warning", "(") +
+									theme.fg("success", `${g.commands.length}`) +
+									theme.fg("dim", ` command${g.commands.length > 1 ? "s" : ""}`) +
+									theme.fg("warning", ")"),
+								);
+							}
+							if (g.agents.length) {
+								counts.push(
+									theme.fg("warning", "(") +
+									theme.fg("success", `${g.agents.length}`) +
+									theme.fg("dim", ` agent${g.agents.length > 1 ? "s" : ""}`) +
+									theme.fg("warning", ")"),
+								);
+							}
 
-				// Wrap body text, cap at 3 rows
-				const maxRows = 3;
-				const innerWidth = width - 4;
-				const wrapped = wrapTextWithAnsi(body, innerWidth);
-				const totalItems = g.commands.length + g.skills.length + g.agents.length;
-				const shown = wrapped.slice(0, maxRows);
+							const countStr = counts.length ? "  " + counts.join(" ") : "";
+							const headerLine = truncateToWidth(
+								theme.fg("accent", theme.bold(`  ${g.source}`)) + countStr,
+								maxWidth,
+								"",
+							);
+							lines.push(headerLine);
 
-				for (const wline of shown) {
-					const vis = visibleWidth(wline);
-					const fill = Math.max(0, width - vis - 4);
-					lines.push(bg("  " + wline + " ".repeat(fill) + "  "));
-				}
+							const items: string[] = [];
+							if (g.commands.length) {
+								items.push(
+									theme.fg("warning", "/") +
+									g.commands.map((c) => theme.fg("muted", c.name)).join(theme.fg("warning", ", /")),
+								);
+							}
+							if (g.skills.length) {
+								items.push(
+									theme.fg("warning", "/skill:") +
+									g.skills.map((s) => theme.fg("muted", s)).join(theme.fg("warning", ", /skill:")),
+								);
+							}
+							if (g.agents.length) {
+								items.push(
+									theme.fg("warning", "@") +
+									g.agents.map((a) => theme.fg("success", a.name)).join(theme.fg("warning", ", @")),
+								);
+							}
 
-				if (wrapped.length > maxRows) {
-					const overflow = dim(`  ... ${totalItems - 15 > 0 ? totalItems - 15 : "more"} more`);
-					const oVis = visibleWidth(overflow);
-					const oFill = Math.max(0, width - oVis - 2);
-					lines.push(bg(overflow + " ".repeat(oFill) + "  "));
-				}
+							const body = items.join("\n");
+							lines.push(pad);
 
-				// Bottom padding
-				lines.push(pad);
+							const maxRows = 3;
+							const innerWidth = Math.max(1, maxWidth - horizontalPadding * 2);
+							const wrapped = wrapTextWithAnsi(body, innerWidth);
+							const shown = wrapped.slice(0, maxRows);
 
-				// Spacing between groups
-				if (i < groups.length - 1) lines.push("");
-			}
-			
-			// We send it as "info" which forces it to be a raw text element in the chat 
-			// without the widget container, but preserving all our ANSI colors!
-			ctx.ui.notify(lines.join("\n"), "info");
+							for (const wrappedLine of shown) {
+								const vis = visibleWidth(wrappedLine);
+								const fill = Math.max(0, maxWidth - vis - horizontalPadding * 2);
+								lines.push(theme.bg("selectedBg", sidePad + wrappedLine + " ".repeat(fill) + sidePad));
+							}
+
+							if (wrapped.length > maxRows) {
+								const hiddenLineCount = wrapped.length - maxRows;
+								const overflowCore = truncateToWidth(
+									theme.fg("dim", `... ${hiddenLineCount} more line${hiddenLineCount > 1 ? "s" : ""}`),
+									Math.max(1, maxWidth - horizontalPadding * 2),
+									"",
+								);
+								const overflowVisible = visibleWidth(overflowCore);
+								const overflowFill = Math.max(0, maxWidth - overflowVisible - horizontalPadding * 2);
+								lines.push(theme.bg("selectedBg", sidePad + overflowCore + " ".repeat(overflowFill) + sidePad));
+							}
+
+							lines.push(pad);
+							if (i < groups.length - 1) lines.push("");
+						}
+
+						return lines;
+					},
+					invalidate() {},
+				};
+			});
+
+			summaryClearTimer = setTimeout(() => {
+				summaryClearTimer = undefined;
+				if (!ctx.hasUI) return;
+				ctx.ui.setWidget(SUMMARY_WIDGET_KEY, undefined);
+			}, 12000);
 		}, 100);
 	});
 }
