@@ -29,3 +29,34 @@ pi-pi:
   - tui-expert
   - prompt-expert
   - agent-expert
+
+sdlc-full:
+  - requirements-analyst
+  - architect
+  - tech-lead
+  - planner
+  - builder
+  - tester
+  - reviewer
+  - qa
+  - devops
+
+sdlc-planning:
+  - requirements-analyst
+  - architect
+  - tech-lead
+  - planner
+  - plan-reviewer
+
+sdlc-delivery:
+  - planner
+  - builder
+  - tester
+  - reviewer
+  - devops
+
+sdlc-quality:
+  - tester
+  - reviewer
+  - qa
+  - red-team

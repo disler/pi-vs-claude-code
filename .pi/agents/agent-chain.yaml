@@ -47,3 +47,59 @@ full-review:
       prompt: "Implement this plan:\n\n$INPUT"
     - agent: reviewer
       prompt: "Review this implementation:\n\n$INPUT"
+
+sdlc-full:
+  description: "Full SDLC pipeline — requirements, architecture, plan, build, test, review, QA"
+  steps:
+    - agent: requirements-analyst
+      prompt: "Analyze requirements for: $INPUT\n\nProduce user stories, acceptance criteria, and constraints."
+    - agent: architect
+      prompt: "Design the architecture for these requirements:\n\n$INPUT"
+    - agent: planner
+      prompt: "Create a detailed implementation plan from this architecture:\n\n$INPUT"
+    - agent: builder
+      prompt: "Implement the following plan:\n\n$INPUT"
+    - agent: tester
+      prompt: "Write comprehensive tests for this implementation:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
+    - agent: reviewer
+      prompt: "Review this implementation and tests for bugs, style, and correctness:\n\n$INPUT"
+    - agent: qa
+      prompt: "Validate this implementation against the original requirements. Assess release readiness:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
+
+sdlc-tdd:
+  description: "Test-driven development — write tests first, implement, verify, review"
+  steps:
+    - agent: tester
+      prompt: "Write failing tests for: $INPUT\n\nWrite tests BEFORE implementation. Tests should define the expected behavior."
+    - agent: builder
+      prompt: "Implement code to make these tests pass:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
+    - agent: tester
+      prompt: "Run the tests against the implementation. Add any missing edge case tests:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
+    - agent: reviewer
+      prompt: "Review the implementation and test suite for quality and completeness:\n\n$INPUT"
+
+sdlc-design:
+  description: "Design-first workflow — requirements, architecture, plan, critique, refine"
+  steps:
+    - agent: requirements-analyst
+      prompt: "Gather and analyze requirements for: $INPUT"
+    - agent: architect
+      prompt: "Design the system architecture for these requirements:\n\n$INPUT"
+    - agent: planner
+      prompt: "Create an implementation plan from this architecture:\n\n$INPUT"
+    - agent: plan-reviewer
+      prompt: "Critically review this plan. Challenge assumptions, find gaps, suggest improvements:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
+    - agent: planner
+      prompt: "Revise the plan based on this critique. Address every issue raised:\n\nOriginal request: $ORIGINAL\n\nCritique:\n$INPUT"
+
+sdlc-deploy:
+  description: "Build-to-deploy pipeline — implement, test, review, then configure deployment"
+  steps:
+    - agent: builder
+      prompt: "Implement the following: $INPUT"
+    - agent: tester
+      prompt: "Write and run tests for this implementation:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
+    - agent: reviewer
+      prompt: "Review this implementation and tests:\n\n$INPUT"
+    - agent: devops
+      prompt: "Configure CI/CD and deployment for this implementation. Set up build, test, and deploy pipelines:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
