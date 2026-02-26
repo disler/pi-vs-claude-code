@@ -88,6 +88,7 @@ bun install
 | **pi-pi**               | `extensions/pi-pi.ts`               | Meta-agent that builds Pi agents using parallel research experts for documentation                                                                         |
 | **session-replay**      | `extensions/session-replay.ts`      | Scrollable timeline overlay of session history - showcasing customizable dialog UI                                                                         |
 | **theme-cycler**        | `extensions/theme-cycler.ts`        | Keyboard shortcuts (Ctrl+X/Ctrl+Q) and `/theme` command to cycle/switch between custom themes                                                              |
+| **ghostty-import**      | `extensions/ghostty-import.ts`      | `/ghostty <name>` fetches any of 463 Ghostty themes from iTerm2-Color-Schemes, converts to Pi format, saves to `.pi/themes/`                              |
 
 ---
 
