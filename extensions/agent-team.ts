@@ -6,13 +6,16 @@
  * maintains its own Pi session for cross-invocation memory.
  *
  * Loads agent definitions from agents/*.md, .claude/agents/*.md, .pi/agents/*.md.
- * Teams are defined in .pi/agents/teams.yaml — on boot a select dialog lets
+ * Teams are defined in ~/.pi/agents/teams.yaml and/or .pi/agents/teams.yaml —
+ * on boot a select dialog lets
  * you pick which team to work with. Only team members are available for dispatch.
  *
  * Commands:
  *   /agents-team          — switch active team
  *   /agents-list          — list loaded agents
  *   /agents-grid N        — set column count (default 2)
+ *   /agents-approval MODE — dispatch approval mode: off|writes|always
+ *   /agents-mode MODE     — subagent mode: json|tmux
  *
  * Usage: pi -e extensions/agent-team.ts
  */
@@ -22,7 +25,9 @@ import { Type } from "@sinclair/typebox";
 import { Text, type AutocompleteItem, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { spawn } from "child_process";
 import { readdirSync, readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
-import { join, resolve } from "path";
+import { dirname, join, resolve } from "path";
+import { fileURLToPath } from "url";
+import { homedir } from "os";
 import { applyExtensionDefaults } from "./themeMap.ts";
 
 // ── Types ────────────────────────────────────────
@@ -47,6 +52,9 @@ interface AgentState {
 	runCount: number;
 	timer?: ReturnType<typeof setInterval>;
 }
+
+type DispatchApprovalMode = "off" | "writes" | "always";
+type SubagentExecutionMode = "json" | "tmux";
 
 // ── Display Name Helper ──────────────────────────
 
@@ -95,6 +103,31 @@ function getDefaultGridColumns(teamSize: number): number {
 	}
 
 	return 3;
+}
+
+function parseToolsList(tools: string): Set<string> {
+	return new Set(
+		tools
+			.split(",")
+			.map(t => t.trim().toLowerCase())
+			.filter(Boolean),
+	);
+}
+
+function taskLooksLikeModify(task: string): boolean {
+	return /\b(edit|modify|change|write|update|delete|remove|refactor|patch|rewrite)\b/i.test(task);
+}
+
+function requiresDispatchApproval(def: AgentDef, task: string, mode: DispatchApprovalMode): boolean {
+	if (mode === "off") return false;
+	if (mode === "always") return true;
+
+	const tools = parseToolsList(def.tools);
+	return tools.has("write") || tools.has("edit") || taskLooksLikeModify(task);
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 // ── Teams YAML Parser ────────────────────────────
@@ -148,10 +181,15 @@ function parseAgentFile(filePath: string): AgentDef | null {
 }
 
 function scanAgentDirs(cwd: string): AgentDef[] {
+	const home = homedir();
 	const dirs = [
+		// Project-local (higher precedence)
 		join(cwd, "agents"),
 		join(cwd, ".claude", "agents"),
 		join(cwd, ".pi", "agents"),
+		// Global fallbacks (available everywhere)
+		join(home, ".pi", "agents"),
+		join(home, ".claude", "agents"),
 	];
 
 	const agents: AgentDef[] = [];
@@ -186,6 +224,8 @@ export default function agentTeamExtension(pi: ExtensionAPI): void {
 	let widgetCtx: any;
 	let sessionDir = "";
 	let contextWindow = 0;
+	let dispatchApprovalMode: DispatchApprovalMode = "writes";
+	let subagentExecutionMode: SubagentExecutionMode = "json";
 
 	function loadAgents(cwd: string) {
 		// Create session storage dir
@@ -197,17 +237,19 @@ export default function agentTeamExtension(pi: ExtensionAPI): void {
 		// Load all agent definitions
 		allAgentDefs = scanAgentDirs(cwd);
 
-		// Load teams from .pi/agents/teams.yaml
-		const teamsPath = join(cwd, ".pi", "agents", "teams.yaml");
-		if (existsSync(teamsPath)) {
+		// Load teams (global first, then project override)
+		const nextTeams: Record<string, string[]> = {};
+		const globalTeamsPath = join(homedir(), ".pi", "agents", "teams.yaml");
+		const projectTeamsPath = join(cwd, ".pi", "agents", "teams.yaml");
+
+		for (const teamsPath of [globalTeamsPath, projectTeamsPath]) {
+			if (!existsSync(teamsPath)) continue;
 			try {
-				teams = parseTeamsYaml(readFileSync(teamsPath, "utf-8"));
-			} catch {
-				teams = {};
-			}
-		} else {
-			teams = {};
+				Object.assign(nextTeams, parseTeamsYaml(readFileSync(teamsPath, "utf-8")));
+			} catch {}
 		}
+
+		teams = nextTeams;
 
 		// If no teams defined, create a default "all" team
 		if (Object.keys(teams).length === 0) {
@@ -388,7 +430,125 @@ export default function agentTeamExtension(pi: ExtensionAPI): void {
 		const agentSessionFile = join(sessionDir, `${agentKey}.json`);
 
 		// Build args — first run creates session, subsequent runs resume
-		const permissionGateExt = resolve(ctx.cwd, "extensions", "permission-gate.ts");
+		// Prefer project-local extension, fallback to sibling file next to this extension.
+		const projectPermissionGateExt = resolve(ctx.cwd, "extensions", "permission-gate.ts");
+		const bundledPermissionGateExt = resolve(dirname(fileURLToPath(import.meta.url)), "permission-gate.ts");
+		const permissionGateExt = existsSync(projectPermissionGateExt)
+			? projectPermissionGateExt
+			: bundledPermissionGateExt;
+
+		if (!existsSync(permissionGateExt)) {
+			clearInterval(state.timer);
+			state.elapsed = Date.now() - startTime;
+			state.status = "error";
+			state.lastWork = "Error: permission-gate.ts not found for subagent run";
+			updateWidget();
+			if (ctx.hasUI) {
+				ctx.ui.notify("agent-team: subagent blocked (permission-gate.ts not found)", "error");
+			}
+			return Promise.resolve({
+				output:
+					"Subagent launch aborted: permission-gate.ts is required but was not found. " +
+					`Checked: ${projectPermissionGateExt} and ${bundledPermissionGateExt}`,
+				exitCode: 1,
+				elapsed: state.elapsed,
+			});
+		}
+
+		if (subagentExecutionMode === "tmux") {
+			const interactiveArgs = [
+				"-e", permissionGateExt,
+				"--model", model,
+				"--tools", state.def.tools,
+				"--thinking", "off",
+				"--append-system-prompt", state.def.systemPrompt,
+				"--session", agentSessionFile,
+			];
+			if (state.sessionFile) {
+				interactiveArgs.push("-c");
+			}
+			interactiveArgs.push(task);
+
+			const shellCmd = `cd ${shellQuote(ctx.cwd)} && pi ${interactiveArgs.map(shellQuote).join(" ")}`;
+			const windowName = `agent-${agentKey}`.slice(0, 24);
+			const tmuxArgs = process.env.TMUX
+				? ["new-window", "-d", "-P", "-F", "#{window_id}", "-n", windowName, shellCmd]
+				: ["new-session", "-d", "-P", "-F", "#{session_name}", "-s", `pi-${agentKey}-${Date.now()}`, shellCmd];
+
+			return new Promise((resolve) => {
+				let out = "";
+				let err = "";
+				const tmux = spawn("tmux", tmuxArgs, {
+					stdio: ["ignore", "pipe", "pipe"],
+					env: { ...process.env },
+				});
+				tmux.stdout?.setEncoding("utf-8");
+				tmux.stderr?.setEncoding("utf-8");
+				tmux.stdout?.on("data", (c: string) => { out += c; });
+				tmux.stderr?.on("data", (c: string) => { err += c; });
+
+				tmux.on("close", async (code) => {
+					if (code !== 0) {
+						clearInterval(state.timer);
+						state.elapsed = Date.now() - startTime;
+						state.status = "error";
+						state.lastWork = `tmux launch failed: ${err || `exit ${code}`}`;
+						updateWidget();
+						resolve({
+							output: `Failed to launch subagent in tmux. ${err || `exit ${code}`}`,
+							exitCode: 1,
+							elapsed: state.elapsed,
+						});
+						return;
+					}
+
+					const handleId = (out || "").trim();
+					const where = process.env.TMUX
+						? `tmux window ${handleId || windowName}`
+						: `tmux session ${handleId || "(created)"}`;
+
+					if (ctx.hasUI) {
+						ctx.ui.notify(
+							`Subagent started in ${where}. Complete approvals/work there, then return here to confirm.`,
+							"info",
+						);
+						const done = await ctx.ui.confirm(
+							`Subagent ${displayName(state.def.name)} running in tmux`,
+							`Location: ${where}\n\nTask: ${task}\n\nSelect Yes when finished, No to mark as aborted.`,
+							{ timeout: 7200000 },
+						);
+						state.status = done ? "done" : "error";
+					} else {
+						state.status = "done";
+					}
+
+					clearInterval(state.timer);
+					state.elapsed = Date.now() - startTime;
+					state.sessionFile = agentSessionFile;
+					state.lastWork = `Handled in ${where}`;
+					updateWidget();
+
+					resolve({
+						output: `Subagent launched in ${where}. Result marked as ${state.status}.`,
+						exitCode: state.status === "done" ? 0 : 1,
+						elapsed: state.elapsed,
+					});
+				});
+
+				tmux.on("error", (spawnErr) => {
+					clearInterval(state.timer);
+					state.elapsed = Date.now() - startTime;
+					state.status = "error";
+					state.lastWork = `tmux error: ${spawnErr.message}`;
+					updateWidget();
+					resolve({
+						output: `Error launching tmux subagent: ${spawnErr.message}`,
+						exitCode: 1,
+						elapsed: state.elapsed,
+					});
+				});
+			});
+		}
 
 		const args = [
 			"--mode", "json",
@@ -525,6 +685,30 @@ export default function agentTeamExtension(pi: ExtensionAPI): void {
 			const { agent, task } = params as { agent: string; task: string };
 
 			try {
+				const state = agentStates.get(agent.toLowerCase());
+				if (state && requiresDispatchApproval(state.def, task, dispatchApprovalMode)) {
+					if (!ctx.hasUI) {
+						return {
+							content: [{ type: "text", text: `Dispatch blocked: approval mode is '${dispatchApprovalMode}' but no interactive UI is available.` }],
+							details: { agent, task, status: "blocked", elapsed: 0, exitCode: 1, fullOutput: "" },
+						};
+					}
+
+					const tools = state.def.tools || "(default)";
+					const approved = await ctx.ui.confirm(
+						`Approve dispatch to ${displayName(state.def.name)}?`,
+						`Task: ${task}\n\nTools: ${tools}\n\nMode: ${dispatchApprovalMode}`,
+						{ timeout: 120000 },
+					);
+
+					if (!approved) {
+						return {
+							content: [{ type: "text", text: `Dispatch denied by user for ${agent}.` }],
+							details: { agent, task, status: "denied", elapsed: 0, exitCode: 1, fullOutput: "" },
+						};
+					}
+				}
+
 				if (onUpdate) {
 					onUpdate({
 						content: [{ type: "text", text: `Dispatching to ${agent}...` }],
@@ -616,7 +800,7 @@ export default function agentTeamExtension(pi: ExtensionAPI): void {
 			widgetCtx = ctx;
 			const teamNames = Object.keys(teams);
 			if (teamNames.length === 0) {
-				ctx.ui.notify("No teams defined in .pi/agents/teams.yaml", "warning");
+				ctx.ui.notify("No teams defined in ~/.pi/agents/teams.yaml or .pi/agents/teams.yaml", "warning");
 				return;
 			}
 
@@ -632,7 +816,7 @@ export default function agentTeamExtension(pi: ExtensionAPI): void {
 			const name = teamNames[idx];
 			activateTeam(name);
 			updateWidget();
-			ctx.ui.setStatus("agent-team", `Team: ${name} (${agentStates.size})`);
+			ctx.ui.setStatus("agent-team", `Team: ${name} (${agentStates.size}) · mode:${subagentExecutionMode} · approval:${dispatchApprovalMode}`);
 			ctx.ui.notify(`Team: ${name} — ${Array.from(agentStates.values()).map(s => displayName(s.def.name)).join(", ")}`, "info");
 		},
 	});
@@ -670,6 +854,66 @@ export default function agentTeamExtension(pi: ExtensionAPI): void {
 				updateWidget();
 			} else {
 				_ctx.ui.notify("Usage: /agents-grid <1-6>", "error");
+			}
+		},
+	});
+
+	pi.registerCommand("agents-approval", {
+		description: "Dispatch approvals: /agents-approval [off|writes|always|status]",
+		handler: async (args, _ctx) => {
+			const arg = (args || "").trim().toLowerCase();
+			if (!arg || arg === "status") {
+				_ctx.ui.notify(`Dispatch approval mode: ${dispatchApprovalMode}`, "info");
+				return;
+			}
+
+			if (arg === "off" || arg === "writes" || arg === "always") {
+				dispatchApprovalMode = arg;
+				_ctx.ui.setStatus("agent-team", `Team: ${activeTeamName} (${agentStates.size}) · mode:${subagentExecutionMode} · approval:${dispatchApprovalMode}`);
+				_ctx.ui.notify(`Dispatch approval mode set to: ${dispatchApprovalMode}`, "info");
+				return;
+			}
+
+			if (!_ctx.hasUI) {
+				_ctx.ui.notify("Usage: /agents-approval [off|writes|always|status]", "error");
+				return;
+			}
+
+			const choice = await _ctx.ui.select("Dispatch approval mode", ["off", "writes", "always"]);
+			if (choice === "off" || choice === "writes" || choice === "always") {
+				dispatchApprovalMode = choice;
+				_ctx.ui.setStatus("agent-team", `Team: ${activeTeamName} (${agentStates.size}) · mode:${subagentExecutionMode} · approval:${dispatchApprovalMode}`);
+				_ctx.ui.notify(`Dispatch approval mode set to: ${dispatchApprovalMode}`, "info");
+			}
+		},
+	});
+
+	pi.registerCommand("agents-mode", {
+		description: "Subagent execution mode: /agents-mode [json|tmux|status]",
+		handler: async (args, _ctx) => {
+			const arg = (args || "").trim().toLowerCase();
+			if (!arg || arg === "status") {
+				_ctx.ui.notify(`Subagent execution mode: ${subagentExecutionMode}`, "info");
+				return;
+			}
+
+			if (arg === "json" || arg === "tmux") {
+				subagentExecutionMode = arg;
+				_ctx.ui.setStatus("agent-team", `Team: ${activeTeamName} (${agentStates.size}) · mode:${subagentExecutionMode} · approval:${dispatchApprovalMode}`);
+				_ctx.ui.notify(`Subagent execution mode set to: ${subagentExecutionMode}`, "info");
+				return;
+			}
+
+			if (!_ctx.hasUI) {
+				_ctx.ui.notify("Usage: /agents-mode [json|tmux|status]", "error");
+				return;
+			}
+
+			const choice = await _ctx.ui.select("Subagent execution mode", ["json", "tmux"]);
+			if (choice === "json" || choice === "tmux") {
+				subagentExecutionMode = choice;
+				_ctx.ui.setStatus("agent-team", `Team: ${activeTeamName} (${agentStates.size}) · mode:${subagentExecutionMode} · approval:${dispatchApprovalMode}`);
+				_ctx.ui.notify(`Subagent execution mode set to: ${subagentExecutionMode}`, "info");
 			}
 		},
 	});
@@ -746,14 +990,16 @@ ${agentCatalog}`,
 		// Lock down to dispatcher-only (tool already registered at top level)
 		pi.setActiveTools(["dispatch_agent"]);
 
-		_ctx.ui.setStatus("agent-team", `Team: ${activeTeamName} (${agentStates.size})`);
+		_ctx.ui.setStatus("agent-team", `Team: ${activeTeamName} (${agentStates.size}) · mode:${subagentExecutionMode} · approval:${dispatchApprovalMode}`);
 		const members = Array.from(agentStates.values()).map(s => displayName(s.def.name)).join(", ");
 		_ctx.ui.notify(
 			`Team: ${activeTeamName} (${members})\n` +
-			`Team sets loaded from: .pi/agents/teams.yaml\n\n` +
+			`Team sets loaded from: ~/.pi/agents/teams.yaml and/or .pi/agents/teams.yaml\n\n` +
 			`/agents-team          Select a team\n` +
 			`/agents-list          List active agents and status\n` +
-			`/agents-grid <1-6>    Set grid column count`,
+			`/agents-grid <1-6>    Set grid column count\n` +
+			`/agents-approval      Dispatch approval mode (off|writes|always)\n` +
+			`/agents-mode          Subagent execution mode (json|tmux)`,
 			"info",
 		);
 		updateWidget();
@@ -771,7 +1017,8 @@ ${agentCatalog}`,
 
 				const left = theme.fg("dim", ` ${model}`) +
 					theme.fg("muted", " · ") +
-					theme.fg("accent", activeTeamName);
+					theme.fg("accent", activeTeamName) +
+					theme.fg("dim", " · /perm-mode");
 				const right = theme.fg("dim", `[${bar}] ${Math.round(pct)}% `);
 				const pad = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(right)));
 

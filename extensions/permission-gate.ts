@@ -22,6 +22,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
 
 const DANGEROUS_BASH_PATTERNS: RegExp[] = [
 	/\brm\s+(-rf?|--recursive)/i,
@@ -49,11 +50,13 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async function onSessionStart(_event, ctx) {
 		updateModeUI(ctx, mode);
+		updateModeWidget(ctx, mode);
 	});
 
 	pi.on("session_switch", async function onSessionSwitch(_event, ctx) {
 		resetSessionState();
 		updateModeUI(ctx, mode);
+		updateModeWidget(ctx, mode);
 	});
 
 	pi.registerShortcut(TOGGLE_EDIT_MODE_SHORTCUT, {
@@ -131,6 +134,7 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 	function setMode(nextMode: PermissionMode, ctx: ExtensionContext): void {
 		mode = nextMode;
 		updateModeUI(ctx, mode);
+		updateModeWidget(ctx, mode);
 
 		if (!ctx.hasUI) {
 			return;
@@ -233,6 +237,46 @@ function updateModeUI(ctx: ExtensionContext, mode: PermissionMode): void {
 	const modeLabel = getModeLabel(mode);
 	const detail = getModeDetail(mode);
 	ctx.ui.setStatus("perm-gate", `🔐 ${modeLabel} · ${detail} · ${TOGGLE_EDIT_MODE_SHORTCUT}`);
+}
+
+function updateModeWidget(ctx: ExtensionContext, mode: PermissionMode): void {
+	if (!ctx.hasUI) {
+		return;
+	}
+
+	// Avoid duplicate status surfaces in normal mode.
+	// Only show the extra widget when agent-team is loaded (it overrides footer/status visibility).
+	if (!isAgentTeamLoadedFromArgv()) {
+		ctx.ui.setWidget("perm-gate-mode", undefined);
+		return;
+	}
+
+	const modeLabel = getModeLabel(mode);
+	ctx.ui.setWidget("perm-gate-mode", (_tui, theme) => {
+		return new Text(
+			theme.fg("accent", "🔐 Permission: ") +
+			theme.fg("success", modeLabel) +
+			theme.fg("dim", ` · ${TOGGLE_EDIT_MODE_SHORTCUT}`),
+			0,
+			0,
+		);
+	}, { placement: "belowEditor" });
+}
+
+function isAgentTeamLoadedFromArgv(): boolean {
+	const argv = process.argv;
+	for (let i = 0; i < argv.length - 1; i++) {
+		if (argv[i] !== "-e" && argv[i] !== "--extension") {
+			continue;
+		}
+
+		const source = (argv[i + 1] || "").toLowerCase();
+		if (source.includes("agent-team.ts") || source.includes("agent-team")) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 function getModeLabel(mode: PermissionMode): string {
