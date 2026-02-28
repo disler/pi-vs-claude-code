@@ -19,6 +19,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { spawn } from "child_process";
+import { realpathSync } from "fs";
 import { readdirSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { join, resolve } from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
@@ -291,7 +292,10 @@ export default function (pi: ExtensionAPI) {
 		const textChunks: string[] = [];
 
 		return new Promise((resolve) => {
-			const proc = spawn("pi", args, {
+			// Use process.execPath (real node) + pi script to bypass snap AppArmor confinement.
+		const nodeBin = process.execPath;
+		const piScript = (() => { try { return realpathSync(process.argv[1]); } catch { return process.argv[1]; } })();
+		const proc = spawn(nodeBin, [piScript, ...args], {
 				stdio: ["ignore", "pipe", "pipe"],
 				env: { ...process.env },
 			});
