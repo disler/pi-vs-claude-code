@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: librechat-ingress
+  namespace: librechat
+  labels:
+    app: librechat
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - librechat.example.com
+    secretName: librechat-tls
+  rules:
+  - host: librechat.example.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: librechat-backend
+            port:
+              number: 3080
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: librechat-frontend
+            port:
+              number: 3080

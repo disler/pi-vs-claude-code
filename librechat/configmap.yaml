@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: librechat-config
+  namespace: librechat
+data:
+  NODE_ENV: "production"
+  HOST: "0.0.0.0"
+  PORT: "3080"
+  LOG_LEVEL: "info"
+  # MongoDB connection (will be overridden by secret for password)
+  MONGODB_URI: "mongodb://mongodb.librechat.svc.cluster.local:27017/librechat"
+  # Session configuration
+  SESSION_EXPIRY: "604800000"
+  # Rate limiting
+  RATE_LIMIT_WINDOW_MS: "900000"
+  RATE_LIMIT_MAX_REQUESTS: "100"
+  # File upload settings
+  FILE_UPLOAD_MAX_SIZE: "10485760"
+  # Cache settings
+  CACHE_ENABLED: "true"
+  CACHE_TTL: "3600"

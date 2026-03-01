@@ -1,0 +1,135 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: librechat-backend
+  namespace: librechat
+  labels:
+    app: librechat-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: librechat-backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: librechat-backend
+    spec:
+      serviceAccountName: librechat-backend
+      containers:
+      - name: librechat-backend
+        image: ghcr.io/danny-avila/librechat-dev:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3080
+          name: http
+        envFrom:
+        - configMapRef:
+            name: librechat-config
+        env:
+        - name: MONGODB_URI
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: MONGODB_URI
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: JWT_SECRET
+        - name: MEILI_MASTER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: MEILI_MASTER_KEY
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: OPENAI_API_KEY
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: ANTHROPIC_API_KEY
+        - name: GOOGLE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: GOOGLE_API_KEY
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: librechat-backend
+  namespace: librechat
+  labels:
+    app: librechat-backend
+spec:
+  selector:
+    app: librechat-backend
+  ports:
+  - port: 3080
+    targetPort: 3080
+    name: http
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: librechat-backend
+  namespace: librechat
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: librechat-backend-reader
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: librechat-backend-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: librechat-backend-reader
+subjects:
+- kind: ServiceAccount
+  name: librechat-backend
+  namespace: librechat
