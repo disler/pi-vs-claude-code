@@ -1,6 +1,6 @@
 # Pi vs CC — Extension Playground
 
-Pi Coding Agent extension examples and experiments.
+A practical playground for building, testing, and comparing Pi Coding Agent extensions against Claude Code patterns. This repo focuses on real-world customization: TUI/UX tweaks, safety and permission controls, multi-agent orchestration, and cross-agent interoperability.
 
 ## Tooling
 - **Package manager**: `bun` (not npm/yarn/pnpm)

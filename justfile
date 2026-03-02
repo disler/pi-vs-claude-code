@@ -105,3 +105,6 @@ all:
     just open damage-control minimal theme-cycler
     just open agent-chain theme-cycler
     just open pi-pi theme-cycler
+
+validate-team team_dir:
+    bun scripts/validate-team-artifacts.ts {{team_dir}}

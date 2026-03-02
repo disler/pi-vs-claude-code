@@ -208,7 +208,7 @@
 | IDE Integration        | VS Code, JetBrains, Cursor (inline diffs, @mentions)            | Terminal-only (could integrate via RPC)                            | Claude Code |
 | Web/Mobile/Desktop     | claude.ai/code, iOS app, desktop app                            | Terminal only                                                      | Claude Code |
 | Enterprise SSO/Audit   | Yes (SSO, MFA, audit logs, admin dashboard)                     | No                                                                 | Claude Code |
-| Permissions/Sandboxing | 5 modes, deny-first rules, filesystem/network sandbox           | None by default ("YOLO mode"); permission-gate extension available | Claude Code |
+| Permissions/Sandboxing | 5 modes, deny-first rules, filesystem/network sandbox           | None by default ("YOLO mode"); permission-gate extension with Tab-to-add-feedback messaging | Claude Code |
 | Git Integration        | Deep (commits, PRs, merge conflicts, GitHub Actions, GitLab CI) | Via bash; git-checkpoint extension available                       | Claude Code |
 | Slack/Chat Integration | Native @Claude mentions to PRs                                  | pi-mom Slack bot package                                           | Claude Code |
 

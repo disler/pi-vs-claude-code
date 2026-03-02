@@ -27,7 +27,6 @@ import { Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { spawn } from "child_process";
 import { readFileSync, existsSync, readdirSync, mkdirSync, unlinkSync } from "fs";
 import { join, resolve } from "path";
-import { applyExtensionDefaults } from "./themeMap.ts";
 
 // ── Types ────────────────────────────────────────
 
@@ -724,7 +723,6 @@ ${agentCatalog}
 	// ── Session Start ───────────────────────────
 
 	pi.on("session_start", async (_event, _ctx) => {
-		applyExtensionDefaults(import.meta.url, _ctx);
 		// Clear widget with both old and new ctx — one of them will be valid
 		if (widgetCtx) {
 			widgetCtx.ui.setWidget("agent-chain", undefined);

@@ -3,8 +3,8 @@ full:
   - planner
   - builder
   - reviewer
+  - code-simplifier
   - documenter
-  - red-team
 
 plan-build:
   - planner
@@ -29,3 +29,5 @@ pi-pi:
   - tui-expert
   - prompt-expert
   - agent-expert
+  - planner
+  - documenter

@@ -95,6 +95,11 @@ A practical catalog of everything in `extensions/`.
   - `write`: always prompts
   - `edit`: always prompts
   - `read`: always allowed
+- Custom permission dialog with Tab-to-add-message:
+  - `↑↓` to navigate options, `Enter` to confirm
+  - `Tab` toggles a message input field for sending feedback to the agent/subagent
+  - Feedback is included in the block reason (e.g., `"Blocked by user. Feedback: <message>"`)
+- IPC support: feedback messages propagate through `permission-ipc.ts` to subagents
 - In non-interactive mode (no UI), blocks operations that would require confirmation.
 
 ### `extensions/pi-pi.ts`
