@@ -7,6 +7,7 @@ plan-build-review:
       prompt: "Implement the following plan:\n\n$INPUT"
     - agent: code-reviewer
       prompt: "Review this implementation for bugs, style, and correctness:\n\n$INPUT"
+      fresh: true
 
 plan-build:
   description: "Plan then build — fast two-step implementation without review"
@@ -33,6 +34,7 @@ plan-review-plan:
       prompt: "Create a detailed implementation plan for: $INPUT"
     - agent: plan-reviewer
       prompt: "Critically review this implementation plan. Challenge assumptions, find gaps, and suggest improvements:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
+      fresh: true
     - agent: planner
       prompt: "Revise and improve your implementation plan based on this critique. Address every issue raised and incorporate the recommendations:\n\nOriginal request: $ORIGINAL\n\nCritique:\n$INPUT"
 
@@ -47,6 +49,7 @@ full-review:
       prompt: "Implement this plan:\n\n$INPUT"
     - agent: code-reviewer
       prompt: "Review this implementation:\n\n$INPUT"
+      fresh: true
 
 simplify-loop:
   description: "Two-pass code simplification — simplify, review, simplify again"
@@ -55,6 +58,7 @@ simplify-loop:
       prompt: "Simplify and refine the recently modified code: $INPUT"
     - agent: code-reviewer
       prompt: "Review the simplifications. Identify anything that was over-simplified, lost clarity, or introduced issues:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
+      fresh: true
     - agent: code-simplifier
       prompt: "Apply the review feedback and do a second simplification pass. Address every issue raised:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
 
@@ -63,13 +67,16 @@ review-fix-loop:
   steps:
     - agent: reviewer-pass1
       prompt: "Review this MR and identify critical issues: $INPUT"
+      fresh: true
     - agent: code-simplifier
       prompt: "Fix these critical issues:\n$INPUT"
     - agent: reviewer-pass2
       prompt: "Re-review after fixes. Previous findings:\n$ORIGINAL\nChanges made:\n$INPUT"
+      fresh: true
     - agent: code-simplifier
       prompt: "Fix remaining critical issues:\n$INPUT"
     - agent: reviewer-pass3
       prompt: "Final review pass. Original request:\n$ORIGINAL\nLatest changes:\n$INPUT"
+      fresh: true
     - agent: code-simplifier
       prompt: "Fix any remaining critical issues:\n$INPUT"

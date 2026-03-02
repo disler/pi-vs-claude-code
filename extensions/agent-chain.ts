@@ -43,6 +43,7 @@ import {
 interface ChainStep {
 	agent: string;
 	prompt: string;
+	fresh?: boolean;  // When true, agent starts with no session context (unbiased)
 }
 
 interface ChainDef {
@@ -130,6 +131,13 @@ function parseChainYaml(raw: string): ChainDef[] {
 		const promptMatch = line.match(/^\s+prompt:\s+(.+)$/);
 		if (promptMatch && currentStep) {
 			currentStep.prompt = stripQuotes(promptMatch[1].trim()).replace(/\\n/g, "\n");
+			continue;
+		}
+
+		// Step fresh flag (no context carry)
+		const freshMatch = line.match(/^\s+fresh:\s+(true|false)$/);
+		if (freshMatch && currentStep) {
+			currentStep.fresh = freshMatch[1] === "true";
 			continue;
 		}
 	}
@@ -447,14 +455,24 @@ export default function (pi: ExtensionAPI) {
 		task: string,
 		stepIndex: number,
 		ctx: any,
+		fresh?: boolean,
 	): Promise<{ output: string; exitCode: number; elapsed: number }> {
 		const model = ctx.model
 			? `${ctx.model.provider}/${ctx.model.id}`
 			: "openrouter/google/gemini-3-flash-preview";
 
 		const agentKey = agentDef.name.toLowerCase().replace(/\s+/g, "-");
-		const agentSessionFile = join(sessionDir, `chain-${agentKey}.json`);
-		const hasSession = agentSessions.get(agentKey);
+		let agentSessionFile: string;
+		let hasSession: string | null | undefined;
+
+		if (fresh) {
+			// Fresh mode: use a unique session file so agent has no prior context
+			agentSessionFile = join(sessionDir, `chain-${agentKey}-fresh-${Date.now()}.json`);
+			hasSession = null;
+		} else {
+			agentSessionFile = join(sessionDir, `chain-${agentKey}.json`);
+			hasSession = agentSessions.get(agentKey);
+		}
 
 		// Resolve permission-gate extension for subagent
 		const projectPermissionGateExt = resolve(ctx.cwd, "extensions", "permission-gate.ts");
@@ -607,7 +625,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			const result = await runAgent(agentDef, resolvedPrompt, i, ctx);
+			const result = await runAgent(agentDef, resolvedPrompt, i, ctx, step.fresh);
 
 			if (result.exitCode !== 0) {
 				stepStates[i].status = "error";
