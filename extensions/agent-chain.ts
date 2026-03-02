@@ -23,10 +23,20 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { Text } from "@mariozechner/pi-tui";
 import { spawn } from "child_process";
-import { readFileSync, existsSync, readdirSync, mkdirSync, unlinkSync } from "fs";
-import { join, resolve } from "path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from "fs";
+import { dirname, join, resolve } from "path";
+import { fileURLToPath } from "url";
+import {
+	cleanupIpcDir,
+	IPC_ENV_AGENT,
+	IPC_ENV_DIR,
+	showPermissionDialog,
+	startIpcWatcher,
+	type IpcPermissionRequest,
+	type IpcPermissionResponse,
+} from "./permission-ipc.ts";
 
 // ── Types ────────────────────────────────────────
 
@@ -53,12 +63,25 @@ interface StepState {
 	status: "pending" | "running" | "done" | "error";
 	elapsed: number;
 	lastWork: string;
+	/** Rolling buffer of recent output lines for expanded card view */
+	recentLines: string[];
 }
 
-// ── Display Name Helper ──────────────────────────
+const CARD_OUTPUT_LINES = 7;
+
+// ── Helpers ──────────────────────────────────────
 
 function displayName(name: string): string {
 	return name.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+/** Strip matching single or double quotes from a string. */
+function stripQuotes(s: string): string {
+	if ((s.startsWith('"') && s.endsWith('"')) ||
+		(s.startsWith("'") && s.endsWith("'"))) {
+		return s.slice(1, -1);
+	}
+	return s;
 }
 
 // ── Chain YAML Parser ────────────────────────────
@@ -84,12 +107,7 @@ function parseChainYaml(raw: string): ChainDef[] {
 		// Chain description
 		const descMatch = line.match(/^\s+description:\s+(.+)$/);
 		if (descMatch && current && !currentStep) {
-			let desc = descMatch[1].trim();
-			if ((desc.startsWith('"') && desc.endsWith('"')) ||
-				(desc.startsWith("'") && desc.endsWith("'"))) {
-				desc = desc.slice(1, -1);
-			}
-			current.description = desc;
+			current.description = stripQuotes(descMatch[1].trim());
 			continue;
 		}
 
@@ -111,13 +129,7 @@ function parseChainYaml(raw: string): ChainDef[] {
 		// Step prompt line
 		const promptMatch = line.match(/^\s+prompt:\s+(.+)$/);
 		if (promptMatch && currentStep) {
-			let prompt = promptMatch[1].trim();
-			if ((prompt.startsWith('"') && prompt.endsWith('"')) ||
-				(prompt.startsWith("'") && prompt.endsWith("'"))) {
-				prompt = prompt.slice(1, -1);
-			}
-			prompt = prompt.replace(/\\n/g, "\n");
-			currentStep.prompt = prompt;
+			currentStep.prompt = stripQuotes(promptMatch[1].trim()).replace(/\\n/g, "\n");
 			continue;
 		}
 	}
@@ -192,16 +204,94 @@ export default function (pi: ExtensionAPI) {
 	let activeChain: ChainDef | null = null;
 	let widgetCtx: any;
 	let sessionDir = "";
+	let ipcDir = "";
+	let activeIpcWatcher: (() => void) | null = null;
+	let ipcWatcherRefCount = 0;
 	const agentSessions: Map<string, string | null> = new Map();
 
 	// Per-step state for the active chain
 	let stepStates: StepState[] = [];
 	let pendingReset = false;
 
+	function makeStepStates(steps: ChainStep[]): StepState[] {
+		return steps.map(s => ({
+			agent: s.agent,
+			status: "pending" as const,
+			elapsed: 0,
+			lastWork: "",
+			recentLines: [],
+		}));
+	}
+
+	// ── IPC Watcher (parent side) ───────────────
+
+	function makeIpcResponse(
+		id: string,
+		approved: boolean,
+		choice: string,
+		message?: string,
+	): IpcPermissionResponse {
+		return { id, approved, choice, message, timestamp: Date.now() };
+	}
+
+	function acquireIpcWatcher(ctx: any): void {
+		ipcWatcherRefCount++;
+		if (activeIpcWatcher || !ctx.hasUI || !ipcDir) return;
+
+		activeIpcWatcher = startIpcWatcher(ipcDir, async (req: IpcPermissionRequest): Promise<IpcPermissionResponse> => {
+			const agentLabel = displayName(req.agent);
+
+			if (req.type === "bash_dangerous") {
+				const result = await showPermissionDialog(
+					ctx,
+					`⚠️ ${agentLabel}: Dangerous command\n\nCommand: ${req.command}\n\nAllow?`,
+					["Yes", "No"] as const,
+				);
+				const approved = result.choice === "Yes";
+				return makeIpcResponse(req.id, approved, approved ? "allow_once" : "deny", result.message);
+			}
+
+			// write or edit
+			let detail = `File: ${req.path || "unknown"}\n`;
+			if (req.type === "edit" && req.oldText) {
+				detail += `\n── Replacing ──\n${req.oldText}\n\n── With ──\n${req.content || "(empty)"}`;
+			} else if (req.content) {
+				detail += `\n── Content ──\n${req.content}`;
+			}
+
+			const result = await showPermissionDialog(
+				ctx,
+				`🔐 ${agentLabel}: ${req.type} — ${req.path || "unknown"}\n\n${detail}`,
+				["Allow once", "Always allow this file", "Deny"] as const,
+			);
+
+			const choiceMap: Record<string, { approved: boolean; choice: string }> = {
+				"Allow once": { approved: true, choice: "allow_once" },
+				"Always allow this file": { approved: true, choice: "allow_always" },
+			};
+			const mapped = choiceMap[result.choice] || { approved: false, choice: "deny" };
+			return makeIpcResponse(req.id, mapped.approved, mapped.choice, result.message);
+		});
+	}
+
+	function releaseIpcWatcher(): void {
+		ipcWatcherRefCount--;
+		if (ipcWatcherRefCount <= 0) {
+			ipcWatcherRefCount = 0;
+			if (activeIpcWatcher) {
+				activeIpcWatcher();
+				activeIpcWatcher = null;
+			}
+		}
+	}
+
 	function loadChains(cwd: string) {
 		sessionDir = join(cwd, ".pi", "agent-sessions");
-		if (!existsSync(sessionDir)) {
-			mkdirSync(sessionDir, { recursive: true });
+		ipcDir = join(cwd, ".pi", "agent-ipc");
+		for (const dir of [sessionDir, ipcDir]) {
+			if (!existsSync(dir)) {
+				mkdirSync(dir, { recursive: true });
+			}
 		}
 
 		allAgents = scanAgentDirs(cwd);
@@ -213,25 +303,18 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const chainPath = join(cwd, ".pi", "agents", "agent-chain.yaml");
-		if (existsSync(chainPath)) {
-			try {
-				chains = parseChainYaml(readFileSync(chainPath, "utf-8"));
-			} catch {
-				chains = [];
-			}
-		} else {
+		try {
+			chains = existsSync(chainPath)
+				? parseChainYaml(readFileSync(chainPath, "utf-8"))
+				: [];
+		} catch {
 			chains = [];
 		}
 	}
 
 	function activateChain(chain: ChainDef) {
 		activeChain = chain;
-		stepStates = chain.steps.map(s => ({
-			agent: s.agent,
-			status: "pending" as const,
-			elapsed: 0,
-			lastWork: "",
-		}));
+		stepStates = makeStepStates(chain.steps);
 		// Skip widget re-registration if reset is pending — let before_agent_start handle it
 		if (!pendingReset) {
 			updateWidget();
@@ -244,12 +327,14 @@ export default function (pi: ExtensionAPI) {
 		const w = colWidth - 2;
 		const truncate = (s: string, max: number) => s.length > max ? s.slice(0, max - 3) + "..." : s;
 
-		const statusColor = state.status === "pending" ? "dim"
-			: state.status === "running" ? "accent"
-			: state.status === "done" ? "success" : "error";
-		const statusIcon = state.status === "pending" ? "○"
-			: state.status === "running" ? "●"
-			: state.status === "done" ? "✓" : "✗";
+		let statusColor: string;
+		let statusIcon: string;
+		switch (state.status) {
+			case "pending":  statusColor = "dim";     statusIcon = "○"; break;
+			case "running":  statusColor = "accent";  statusIcon = "●"; break;
+			case "done":     statusColor = "success"; statusIcon = "✓"; break;
+			case "error":    statusColor = "error";   statusIcon = "✗"; break;
+		}
 
 		const name = displayName(state.agent);
 		const nameStr = theme.fg("accent", theme.bold(truncate(name, w)));
@@ -260,23 +345,33 @@ export default function (pi: ExtensionAPI) {
 		const statusLine = theme.fg(statusColor, statusStr + timeStr);
 		const statusVisible = statusStr.length + timeStr.length;
 
-		const workRaw = state.lastWork || "";
-		const workText = workRaw ? truncate(workRaw, Math.min(50, w - 1)) : "";
-		const workLine = workText ? theme.fg("muted", workText) : theme.fg("dim", "—");
-		const workVisible = workText ? workText.length : 1;
-
 		const top = "┌" + "─".repeat(w) + "┐";
 		const bot = "└" + "─".repeat(w) + "┘";
+		const sep = "├" + "─".repeat(w) + "┤";
 		const border = (content: string, visLen: number) =>
 			theme.fg("dim", "│") + content + " ".repeat(Math.max(0, w - visLen)) + theme.fg("dim", "│");
 
-		return [
+		const lines: string[] = [
 			theme.fg("dim", top),
 			border(" " + nameStr, 1 + nameVisible),
 			border(" " + statusLine, 1 + statusVisible),
-			border(" " + workLine, 1 + workVisible),
-			theme.fg("dim", bot),
+			theme.fg("dim", sep),
 		];
+
+		const recent = state.recentLines.slice(-CARD_OUTPUT_LINES);
+		for (let i = 0; i < CARD_OUTPUT_LINES; i++) {
+			if (i < recent.length) {
+				const lineText = truncate(recent[i], w - 1);
+				lines.push(border(" " + theme.fg("muted", lineText), 1 + lineText.length));
+			} else if (i === 0 && recent.length === 0) {
+				lines.push(border(" " + theme.fg("dim", "—"), 2));
+			} else {
+				lines.push(border("", 0));
+			}
+		}
+
+		lines.push(theme.fg("dim", bot));
+		return lines;
 	}
 
 	function updateWidget() {
@@ -296,7 +391,7 @@ export default function (pi: ExtensionAPI) {
 					const cols = stepStates.length;
 					const totalArrowWidth = arrowWidth * (cols - 1);
 					const colWidth = Math.max(12, Math.floor((width - totalArrowWidth) / cols));
-					const arrowRow = 2; // middle of 5-line card (0-indexed)
+					const arrowRow = 5; // middle of expanded card (0-indexed)
 
 					const cards = stepStates.map(s => renderCard(s, colWidth, theme));
 					const cardHeight = cards[0].length;
@@ -325,6 +420,26 @@ export default function (pi: ExtensionAPI) {
 		});
 	}
 
+	/** Try to extract a text_delta from a JSON-mode event line. Returns the delta string or null. */
+	function extractTextDelta(json: string): string | null {
+		try {
+			const event = JSON.parse(json);
+			if (event.type === "message_update") {
+				const delta = event.assistantMessageEvent;
+				if (delta?.type === "text_delta") return delta.delta || "";
+			}
+		} catch {}
+		return null;
+	}
+
+	/** Update step state from accumulated text chunks. */
+	function updateStepFromChunks(state: StepState, textChunks: string[]): void {
+		const full = textChunks.join("");
+		const allLines = full.split("\n").filter((l: string) => l.trim());
+		state.recentLines = allLines.slice(-CARD_OUTPUT_LINES);
+		state.lastWork = allLines[allLines.length - 1] || "";
+	}
+
 	// ── Run Agent (subprocess) ──────────────────
 
 	function runAgent(
@@ -341,10 +456,34 @@ export default function (pi: ExtensionAPI) {
 		const agentSessionFile = join(sessionDir, `chain-${agentKey}.json`);
 		const hasSession = agentSessions.get(agentKey);
 
+		// Resolve permission-gate extension for subagent
+		const projectPermissionGateExt = resolve(ctx.cwd, "extensions", "permission-gate.ts");
+		const bundledPermissionGateExt = resolve(dirname(fileURLToPath(import.meta.url)), "permission-gate.ts");
+		const permissionGateExt = existsSync(projectPermissionGateExt)
+			? projectPermissionGateExt
+			: bundledPermissionGateExt;
+
+		if (!existsSync(permissionGateExt)) {
+			return Promise.resolve({
+				output: `Error: permission-gate.ts not found for subagent. Checked: ${projectPermissionGateExt} and ${bundledPermissionGateExt}`,
+				exitCode: 1,
+				elapsed: 0,
+			});
+		}
+
+		const subagentPermMode = process.env.PI_PERM_MODE || "guarded";
+
+		const subagentEnv: Record<string, string> = {
+			...process.env as Record<string, string>,
+			PI_PERM_MODE: subagentPermMode,
+			[IPC_ENV_DIR]: ipcDir,
+			[IPC_ENV_AGENT]: agentDef.name,
+		};
+
 		const args = [
 			"--mode", "json",
 			"-p",
-			"--no-extensions",
+			"-e", permissionGateExt,
 			"--model", model,
 			"--tools", agentDef.tools,
 			"--thinking", "off",
@@ -362,10 +501,12 @@ export default function (pi: ExtensionAPI) {
 		const startTime = Date.now();
 		const state = stepStates[stepIndex];
 
+		acquireIpcWatcher(ctx);
+
 		return new Promise((resolve) => {
 			const proc = spawn("pi", args, {
 				stdio: ["ignore", "pipe", "pipe"],
-				env: { ...process.env },
+				env: subagentEnv,
 			});
 
 			const timer = setInterval(() => {
@@ -382,19 +523,12 @@ export default function (pi: ExtensionAPI) {
 				buffer = lines.pop() || "";
 				for (const line of lines) {
 					if (!line.trim()) continue;
-					try {
-						const event = JSON.parse(line);
-						if (event.type === "message_update") {
-							const delta = event.assistantMessageEvent;
-							if (delta?.type === "text_delta") {
-								textChunks.push(delta.delta || "");
-								const full = textChunks.join("");
-								const last = full.split("\n").filter((l: string) => l.trim()).pop() || "";
-								state.lastWork = last;
-								updateWidget();
-							}
-						}
-					} catch {}
+					const delta = extractTextDelta(line);
+					if (delta !== null) {
+						textChunks.push(delta);
+						updateStepFromChunks(state, textChunks);
+						updateWidget();
+					}
 				}
 			});
 
@@ -402,31 +536,29 @@ export default function (pi: ExtensionAPI) {
 			proc.stderr!.on("data", () => {});
 
 			proc.on("close", (code) => {
+				// Process any remaining buffered data
 				if (buffer.trim()) {
-					try {
-						const event = JSON.parse(buffer);
-						if (event.type === "message_update") {
-							const delta = event.assistantMessageEvent;
-							if (delta?.type === "text_delta") textChunks.push(delta.delta || "");
-						}
-					} catch {}
+					const delta = extractTextDelta(buffer);
+					if (delta !== null) textChunks.push(delta);
 				}
 
 				clearInterval(timer);
 				const elapsed = Date.now() - startTime;
 				state.elapsed = elapsed;
 				const output = textChunks.join("");
-				state.lastWork = output.split("\n").filter((l: string) => l.trim()).pop() || "";
+				updateStepFromChunks(state, textChunks);
 
 				if (code === 0) {
 					agentSessions.set(agentKey, agentSessionFile);
 				}
 
+				releaseIpcWatcher();
 				resolve({ output, exitCode: code ?? 1, elapsed });
 			});
 
 			proc.on("error", (err) => {
 				clearInterval(timer);
+				releaseIpcWatcher();
 				resolve({
 					output: `Error spawning agent: ${err.message}`,
 					exitCode: 1,
@@ -448,13 +580,7 @@ export default function (pi: ExtensionAPI) {
 
 		const chainStart = Date.now();
 
-		// Reset all steps to pending
-		stepStates = activeChain.steps.map(s => ({
-			agent: s.agent,
-			status: "pending" as const,
-			elapsed: 0,
-			lastWork: "",
-		}));
+		stepStates = makeStepStates(activeChain.steps);
 		updateWidget();
 
 		let input = task;
@@ -641,17 +767,12 @@ export default function (pi: ExtensionAPI) {
 
 	// ── System Prompt Override ───────────────────
 
-	pi.on("before_agent_start", async (_event, _ctx) => {
+	pi.on("before_agent_start", async (_event, ctx) => {
 		// Force widget reset on first turn after /new
 		if (pendingReset && activeChain) {
 			pendingReset = false;
-			widgetCtx = _ctx;
-			stepStates = activeChain.steps.map(s => ({
-				agent: s.agent,
-				status: "pending" as const,
-				elapsed: 0,
-				lastWork: "",
-			}));
+			widgetCtx = ctx;
+			stepStates = makeStepStates(activeChain.steps);
 			updateWidget();
 		}
 
@@ -722,13 +843,13 @@ ${agentCatalog}
 
 	// ── Session Start ───────────────────────────
 
-	pi.on("session_start", async (_event, _ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		// Clear widget with both old and new ctx — one of them will be valid
 		if (widgetCtx) {
 			widgetCtx.ui.setWidget("agent-chain", undefined);
 		}
-		_ctx.ui.setWidget("agent-chain", undefined);
-		widgetCtx = _ctx;
+		ctx.ui.setWidget("agent-chain", undefined);
+		widgetCtx = ctx;
 
 		// Reset execution state — widget re-registration deferred to before_agent_start
 		stepStates = [];
@@ -736,7 +857,7 @@ ${agentCatalog}
 		pendingReset = true;
 
 		// Wipe chain session files — reset agent context on /new and launch
-		const sessDir = join(_ctx.cwd, ".pi", "agent-sessions");
+		const sessDir = join(ctx.cwd, ".pi", "agent-sessions");
 		if (existsSync(sessDir)) {
 			for (const f of readdirSync(sessDir)) {
 				if (f.startsWith("chain-") && f.endsWith(".json")) {
@@ -745,51 +866,34 @@ ${agentCatalog}
 			}
 		}
 
+		// Stop any active IPC watcher from previous session
+		if (activeIpcWatcher) {
+			activeIpcWatcher();
+			activeIpcWatcher = null;
+		}
+		ipcWatcherRefCount = 0;
+
 		// Reload chains + clear agentSessions map (all agents start fresh)
-		loadChains(_ctx.cwd);
+		loadChains(ctx.cwd);
+
+		// Clean up IPC files from previous session
+		cleanupIpcDir(join(ctx.cwd, ".pi", "agent-ipc"));
 
 		if (chains.length === 0) {
-			_ctx.ui.notify("No chains found in .pi/agents/agent-chain.yaml", "warning");
+			ctx.ui.notify("No chains found in .pi/agents/agent-chain.yaml", "warning");
 			return;
 		}
 
 		// Default to first chain — use /chain to switch
 		activateChain(chains[0]);
 
-		// run_chain is registered as a tool — available alongside all default tools
-
 		const flow = activeChain!.steps.map(s => displayName(s.agent)).join(" → ");
-		_ctx.ui.setStatus("agent-chain", `Chain: ${activeChain!.name} (${activeChain!.steps.length} steps)`);
-		_ctx.ui.notify(
+		ctx.ui.setStatus("agent-chain", `Chain: ${activeChain!.name} (${activeChain!.steps.length} steps)`);
+		ctx.ui.notify(
 			`Chain: ${activeChain!.name}\n${activeChain!.description}\n${flow}\n\n` +
 			`/chain             Switch chain\n` +
 			`/chain-list        List all chains`,
 			"info",
 		);
-
-		// Footer: model | chain name | context bar
-		_ctx.ui.setFooter((_tui, theme, _footerData) => ({
-			dispose: () => {},
-			invalidate() {},
-			render(width: number): string[] {
-				const model = _ctx.model?.id || "no-model";
-				const usage = _ctx.getContextUsage();
-				const pct = usage ? usage.percent : 0;
-				const filled = Math.round(pct / 10);
-				const bar = "#".repeat(filled) + "-".repeat(10 - filled);
-
-				const chainLabel = activeChain
-					? theme.fg("accent", activeChain.name)
-					: theme.fg("dim", "no chain");
-
-				const left = theme.fg("dim", ` ${model}`) +
-					theme.fg("muted", " · ") +
-					chainLabel;
-				const right = theme.fg("dim", `[${bar}] ${Math.round(pct)}% `);
-				const pad = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(right)));
-
-				return [truncateToWidth(left + pad + right, width)];
-			},
-		}));
 	});
 }

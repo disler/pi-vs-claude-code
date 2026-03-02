@@ -575,7 +575,7 @@ function updateModeWidget(ctx: ExtensionContext, mode: PermissionMode): void {
 		return;
 	}
 
-	if (!isAgentTeamLoadedFromArgv()) {
+	if (!isOrchestratorLoadedFromArgv()) {
 		ctx.ui.setWidget("perm-gate-mode", undefined);
 		return;
 	}
@@ -592,7 +592,7 @@ function updateModeWidget(ctx: ExtensionContext, mode: PermissionMode): void {
 	}, { placement: "belowEditor" });
 }
 
-function isAgentTeamLoadedFromArgv(): boolean {
+function isOrchestratorLoadedFromArgv(): boolean {
 	const argv = process.argv;
 	for (let i = 0; i < argv.length - 1; i++) {
 		if (argv[i] !== "-e" && argv[i] !== "--extension") {
@@ -600,7 +600,7 @@ function isAgentTeamLoadedFromArgv(): boolean {
 		}
 
 		const source = (argv[i + 1] || "").toLowerCase();
-		if (source.includes("agent-team")) {
+		if (source.includes("agent-team") || source.includes("agent-chain")) {
 			return true;
 		}
 	}

@@ -5,7 +5,7 @@ plan-build-review:
       prompt: "Plan the implementation for: $INPUT"
     - agent: builder
       prompt: "Implement the following plan:\n\n$INPUT"
-    - agent: reviewer
+    - agent: code-reviewer
       prompt: "Review this implementation for bugs, style, and correctness:\n\n$INPUT"
 
 plan-build:
@@ -45,7 +45,7 @@ full-review:
       prompt: "Based on this analysis, create a plan:\n\n$INPUT"
     - agent: builder
       prompt: "Implement this plan:\n\n$INPUT"
-    - agent: reviewer
+    - agent: code-reviewer
       prompt: "Review this implementation:\n\n$INPUT"
 
 simplify-loop:
@@ -53,7 +53,7 @@ simplify-loop:
   steps:
     - agent: code-simplifier
       prompt: "Simplify and refine the recently modified code: $INPUT"
-    - agent: reviewer
+    - agent: code-reviewer
       prompt: "Review the simplifications. Identify anything that was over-simplified, lost clarity, or introduced issues:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
     - agent: code-simplifier
       prompt: "Apply the review feedback and do a second simplification pass. Address every issue raised:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
