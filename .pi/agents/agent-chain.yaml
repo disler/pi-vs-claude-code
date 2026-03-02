@@ -47,3 +47,29 @@ full-review:
       prompt: "Implement this plan:\n\n$INPUT"
     - agent: reviewer
       prompt: "Review this implementation:\n\n$INPUT"
+
+simplify-loop:
+  description: "Two-pass code simplification — simplify, review, simplify again"
+  steps:
+    - agent: code-simplifier
+      prompt: "Simplify and refine the recently modified code: $INPUT"
+    - agent: reviewer
+      prompt: "Review the simplifications. Identify anything that was over-simplified, lost clarity, or introduced issues:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
+    - agent: code-simplifier
+      prompt: "Apply the review feedback and do a second simplification pass. Address every issue raised:\n\n$INPUT\n\nOriginal request: $ORIGINAL"
+
+review-fix-loop:
+  description: "Review MR, fix critical issues, repeat 3x with fresh reviewers"
+  steps:
+    - agent: reviewer-pass1
+      prompt: "Review this MR and identify critical issues: $INPUT"
+    - agent: code-simplifier
+      prompt: "Fix these critical issues:\n$INPUT"
+    - agent: reviewer-pass2
+      prompt: "Re-review after fixes. Previous findings:\n$ORIGINAL\nChanges made:\n$INPUT"
+    - agent: code-simplifier
+      prompt: "Fix remaining critical issues:\n$INPUT"
+    - agent: reviewer-pass3
+      prompt: "Final review pass. Original request:\n$ORIGINAL\nLatest changes:\n$INPUT"
+    - agent: code-simplifier
+      prompt: "Fix any remaining critical issues:\n$INPUT"
