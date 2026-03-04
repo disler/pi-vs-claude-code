@@ -37,7 +37,11 @@ ext-tool-counter-widget:
 ext-subagent-widget:
     pi -e extensions/subagent-widget.ts -e extensions/pure-focus.ts -e extensions/theme-cycler.ts
 
-# 9. TillDone: task-driven discipline — define tasks before working
+# 9a. Todo: lightweight task tracking — no gates, no nudges
+ext-todo:
+    pi -e extensions/todo.ts -e extensions/theme-cycler.ts
+
+# 9b. TillDone: task-driven discipline — define tasks before working
 ext-tilldone:
     pi -e extensions/tilldone.ts -e extensions/theme-cycler.ts
 
@@ -99,6 +103,7 @@ all:
     just open tool-counter
     just open tool-counter-widget minimal
     just open subagent-widget pure-focus theme-cycler
+    just open todo theme-cycler
     just open tilldone theme-cycler
     just open agent-team theme-cycler
     just open system-select minimal theme-cycler
