@@ -99,6 +99,14 @@ A practical catalog of everything in `extensions/`.
   - `↑↓` to navigate options, `Enter` to confirm
   - `Tab` toggles a message input field for sending feedback to the agent/subagent
   - Feedback is included in the block reason (e.g., `"Blocked by user. Feedback: <message>"`)
+- Permission mode status language is standardized:
+  - `🔐 GUARDED`
+  - `🔓 AUTO-EDIT`
+- Compact-first status UI with configurable style via `/perm-mode`:
+  - `compact` → badge only
+  - `medium` → badge + `C-S-E` shortcut hint
+  - `verbose` → badge + detail + shortcut hint
+- Extra detail is routed to notifications and the optional orchestrator widget (instead of always-on long status text).
 - IPC support: feedback messages propagate through `permission-ipc.ts` to subagents
 - In non-interactive mode (no UI), blocks operations that would require confirmation.
 

@@ -126,7 +126,7 @@ bun install
 
 | Extension          | File                           | Description                                                                                                 |
 | ------------------ | ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| **permission-gate** | `extensions/permission-gate.ts` | Confirmation prompts for dangerous bash and write/edit ops; Ctrl+Shift+E toggles auto-edit; `/perm-mode`   |
+| **permission-gate** | `extensions/permission-gate.ts` | Confirmation prompts for dangerous bash and write/edit ops; compact status (`🔐 GUARDED` / `🔓 AUTO-EDIT`); Ctrl+Shift+E toggle; `/perm-mode` + style |
 | **damage-control** | `extensions/damage-control.ts` | Real-time safety auditing — intercepts dangerous patterns and enforces path rules from `damage-control-rules.yaml` |
 
 ### Integration
@@ -286,6 +286,8 @@ The `permission-gate` extension adds interactive approval flows for write/edit o
 
 - **Allow once**, **Always allow this file (session)**, or **Deny** for each write/edit.
 - **Message to agent** — attach feedback when approving or denying; appended to tool results so the active agent/subagent sees it in-turn.
+- **Mode labels** — standardized UI badges: `🔐 GUARDED` and `🔓 AUTO-EDIT`.
+- **Compact status by default** — persistent status stays short; use `/perm-mode style [compact|medium|verbose]` to change verbosity.
 - **Auto-edit mode** — Ctrl+Shift+E toggles pre-approval for all write/edit ops; `/perm-mode` to view or set.
 - **IPC support** — headless subagents relay permission prompts to the parent session via `permission-ipc`.
 

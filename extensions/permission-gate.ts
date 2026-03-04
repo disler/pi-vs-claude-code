@@ -12,8 +12,8 @@
  *
  * Extra controls:
  * - Ctrl+Shift+E toggles AUTO-EDIT mode for this session
- * - /perm-mode command to view/set mode
- * - Footer status shows current permission mode
+ * - /perm-mode command to view/set mode and status style
+ * - Footer status is compact by default; /perm-mode style [compact|medium|verbose]
  *
  * IPC support:
  * When PI_IPC_DIR is set (by a parent orchestrator), headless subagents
@@ -292,7 +292,10 @@ const DANGEROUS_BASH_PATTERNS: RegExp[] = [
 ];
 
 const TOGGLE_EDIT_MODE_SHORTCUT = "ctrl+shift+e";
+const SHORTCUT_HINT = "C-S-E";
+const STATUS_VERBOSITY_ENV = "PI_PERM_STATUS_VERBOSITY";
 const MODE_OPTIONS = ["guarded", "auto-edit", "cancel"] as const;
+const STATUS_VERBOSITY_OPTIONS = ["compact", "medium", "verbose"] as const;
 const MODIFY_PERMISSION_OPTIONS = [
 	"Allow once",
 	"Always allow this file (session)",
@@ -301,6 +304,7 @@ const MODIFY_PERMISSION_OPTIONS = [
 
 type BlockResult = { block: true; reason: string };
 type PermissionMode = "guarded" | "auto-edit";
+type StatusVerbosity = (typeof STATUS_VERBOSITY_OPTIONS)[number];
 type ModifyToolName = "write" | "edit";
 type ModifyPermissionChoice = (typeof MODIFY_PERMISSION_OPTIONS)[number];
 
@@ -310,14 +314,17 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 	const allowedModifyPaths = new Set<string>();
 	const pendingFeedback = new Map<string, string>();
 	const defaultMode = parsePermissionModeFromEnv(process.env.PI_PERM_MODE);
+	const defaultVerbosity = parseStatusVerbosityFromEnv(process.env[STATUS_VERBOSITY_ENV]);
 	const ipcDir = process.env[IPC_ENV_DIR] || "";
 	const ipcAgent = process.env[IPC_ENV_AGENT] || "subagent";
 	let mode: PermissionMode = defaultMode;
+	let statusVerbosity: StatusVerbosity = defaultVerbosity;
 	process.env.PI_PERM_MODE = mode;
+	process.env[STATUS_VERBOSITY_ENV] = statusVerbosity;
 
 	function refreshUI(ctx: ExtensionContext): void {
-		updateModeUI(ctx, mode);
-		updateModeWidget(ctx, mode);
+		updateModeUI(ctx, mode, statusVerbosity);
+		updateModeWidget(ctx, mode, statusVerbosity);
 	}
 
 	pi.on("session_start", async function onSessionStart(_event, ctx) {
@@ -337,14 +344,16 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("perm-mode", {
-		description: "Permission mode: /perm-mode [guarded|auto-edit|toggle|status]",
+		description: "Permission mode: /perm-mode [guarded|auto-edit|toggle|status|compact|medium|verbose|style <...>]",
 		handler: async function onPermModeCommand(args, ctx) {
-			const arg = args.trim().toLowerCase();
+			const tokens = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
+			const arg = tokens[0] ?? "";
+			const styleArg = arg === "style" ? (tokens[1] ?? "") : arg;
 
 			if (arg.length === 0 || arg === "status") {
-				updateModeUI(ctx, mode);
+				refreshUI(ctx);
 				if (ctx.hasUI) {
-					ctx.ui.notify(`permission-gate mode: ${mode}`, "info");
+					ctx.ui.notify(getModeStatusSummary(mode, statusVerbosity), "info");
 				}
 				return;
 			}
@@ -359,7 +368,20 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
+			if (isStatusVerbosity(styleArg)) {
+				setStatusVerbosity(styleArg, ctx);
+				return;
+			}
+
 			if (!ctx.hasUI) {
+				return;
+			}
+
+			if (arg === "style") {
+				const stylePick = await ctx.ui.select("Set permission status style", [...STATUS_VERBOSITY_OPTIONS, "cancel"]);
+				if (isStatusVerbosity(stylePick)) {
+					setStatusVerbosity(stylePick, ctx);
+				}
 				return;
 			}
 
@@ -427,7 +449,9 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 		allowedModifyPaths.clear();
 		pendingFeedback.clear();
 		mode = defaultMode;
+		statusVerbosity = defaultVerbosity;
 		process.env.PI_PERM_MODE = mode;
+		process.env[STATUS_VERBOSITY_ENV] = statusVerbosity;
 	}
 
 	function setMode(nextMode: PermissionMode, ctx: ExtensionContext): void {
@@ -437,6 +461,16 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 
 		if (ctx.hasUI) {
 			ctx.ui.notify(getModeNotification(mode), "info");
+		}
+	}
+
+	function setStatusVerbosity(nextVerbosity: StatusVerbosity, ctx: ExtensionContext): void {
+		statusVerbosity = nextVerbosity;
+		process.env[STATUS_VERBOSITY_ENV] = statusVerbosity;
+		refreshUI(ctx);
+
+		if (ctx.hasUI) {
+			ctx.ui.notify(`permission-gate style: ${statusVerbosity}`, "info");
 		}
 	}
 }
@@ -560,17 +594,15 @@ async function handleModifyToolCall(
 
 // ── UI Helpers ───────────────────────────────────
 
-function updateModeUI(ctx: ExtensionContext, mode: PermissionMode): void {
+function updateModeUI(ctx: ExtensionContext, mode: PermissionMode, verbosity: StatusVerbosity): void {
 	if (!ctx.hasUI) {
 		return;
 	}
 
-	const modeLabel = getModeLabel(mode);
-	const detail = getModeDetail(mode);
-	ctx.ui.setStatus("perm-gate", `🔐 ${modeLabel} · ${detail} · ${TOGGLE_EDIT_MODE_SHORTCUT}`);
+	ctx.ui.setStatus("perm-gate", getModeStatusText(mode, verbosity));
 }
 
-function updateModeWidget(ctx: ExtensionContext, mode: PermissionMode): void {
+function updateModeWidget(ctx: ExtensionContext, mode: PermissionMode, verbosity: StatusVerbosity): void {
 	if (!ctx.hasUI) {
 		return;
 	}
@@ -580,12 +612,13 @@ function updateModeWidget(ctx: ExtensionContext, mode: PermissionMode): void {
 		return;
 	}
 
-	const modeLabel = getModeLabel(mode);
+	const modeBadge = getModeBadge(mode);
+	const detail = getModeDetail(mode);
 	ctx.ui.setWidget("perm-gate-mode", (_tui, theme) => {
 		return new Text(
-			theme.fg("accent", "🔐 Permission: ") +
-			theme.fg("success", modeLabel) +
-			theme.fg("dim", ` · ${TOGGLE_EDIT_MODE_SHORTCUT}`),
+			theme.fg("accent", "Permission: ") +
+			theme.fg("success", modeBadge) +
+			theme.fg("dim", ` · ${detail} · ${TOGGLE_EDIT_MODE_SHORTCUT} · style:${verbosity}`),
 			0,
 			0,
 		);
@@ -608,18 +641,45 @@ function isOrchestratorLoadedFromArgv(): boolean {
 	return false;
 }
 
+function getModeIcon(mode: PermissionMode): string {
+	return mode === "auto-edit" ? "🔓" : "🔐";
+}
+
 function getModeLabel(mode: PermissionMode): string {
 	return mode === "auto-edit" ? "AUTO-EDIT" : "GUARDED";
+}
+
+function getModeBadge(mode: PermissionMode): string {
+	return `${getModeIcon(mode)} ${getModeLabel(mode)}`;
+}
+
+function getModeStatusText(mode: PermissionMode, verbosity: StatusVerbosity): string {
+	const modeBadge = getModeBadge(mode);
+	if (verbosity === "compact") {
+		return modeBadge;
+	}
+	if (verbosity === "medium") {
+		return `${modeBadge} · ${SHORTCUT_HINT}`;
+	}
+	return `${modeBadge} · ${getModeDetail(mode)} · ${SHORTCUT_HINT}`;
 }
 
 function getModeDetail(mode: PermissionMode): string {
 	return mode === "auto-edit" ? "write/edit are pre-approved" : "write/edit require confirmation";
 }
 
+function getModeStatusSummary(mode: PermissionMode, verbosity: StatusVerbosity): string {
+	return `permission-gate: ${getModeBadge(mode)} · ${getModeDetail(mode)} · style=${verbosity} · toggle=${TOGGLE_EDIT_MODE_SHORTCUT}`;
+}
+
 function getModeNotification(mode: PermissionMode): string {
 	return mode === "auto-edit"
-		? "permission-gate: AUTO-EDIT enabled (write/edit tool calls are pre-approved)"
-		: "permission-gate: GUARDED mode enabled";
+		? `permission-gate: 🔓 AUTO-EDIT enabled · write/edit are pre-approved · toggle: ${TOGGLE_EDIT_MODE_SHORTCUT}`
+		: `permission-gate: 🔐 GUARDED enabled · write/edit require confirmation · toggle: ${TOGGLE_EDIT_MODE_SHORTCUT}`;
+}
+
+function isStatusVerbosity(value: string): value is StatusVerbosity {
+	return STATUS_VERBOSITY_OPTIONS.includes(value as StatusVerbosity);
 }
 
 function toggleMode(mode: PermissionMode): PermissionMode {
@@ -637,4 +697,8 @@ function normalizePath(rawPath: string | undefined, cwd: string): string | undef
 
 function parsePermissionModeFromEnv(raw: string | undefined): PermissionMode {
 	return raw === "auto-edit" ? "auto-edit" : "guarded";
+}
+
+function parseStatusVerbosityFromEnv(raw: string | undefined): StatusVerbosity {
+	return isStatusVerbosity(raw ?? "") ? raw as StatusVerbosity : "compact";
 }
