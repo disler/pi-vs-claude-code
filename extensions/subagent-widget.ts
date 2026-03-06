@@ -16,7 +16,8 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-const { spawn } = require("child_process") as any;
+import { spawn } from "child_process";
+import { realpathSync } from "fs";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -139,7 +140,12 @@ export default function (pi: ExtensionAPI) {
 			: "openrouter/google/gemini-3-flash-preview";
 
 		return new Promise<void>((resolve) => {
-			const proc = spawn("pi", [
+			// Use process.execPath (real node binary, not snap wrapper) + resolved pi script
+		// to bypass snap AppArmor confinement that breaks pipes on snap-to-snap spawns.
+		const nodeBin = process.execPath;
+		const piScript = (() => { try { return realpathSync(process.argv[1]); } catch { return process.argv[1]; } })();
+		const proc = spawn(nodeBin, [
+				piScript,
 				"--mode", "json",
 				"-p",
 				"--session", state.sessionFile,   // persistent session for /subcont resumption
