@@ -134,7 +134,7 @@ function parseChainYaml(raw: string): ChainDef[] {
 
 function parseAgentFile(filePath: string): AgentDef | null {
 	try {
-		const raw = readFileSync(filePath, "utf-8");
+		const raw = readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 		const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
 		if (!match) return null;
 
@@ -216,7 +216,7 @@ export default function (pi: ExtensionAPI) {
 		const chainPath = join(cwd, ".pi", "agents", "agent-chain.yaml");
 		if (existsSync(chainPath)) {
 			try {
-				chains = parseChainYaml(readFileSync(chainPath, "utf-8"));
+				chains = parseChainYaml(readFileSync(chainPath, "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
 			} catch {
 				chains = [];
 			}

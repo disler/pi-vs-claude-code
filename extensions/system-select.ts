@@ -43,7 +43,7 @@ function scanAgents(dir: string, source: string): AgentDef[] {
 	try {
 		for (const file of readdirSync(dir)) {
 			if (!file.endsWith(".md")) continue;
-			const raw = readFileSync(join(dir, file), "utf-8");
+			const raw = readFileSync(join(dir, file), "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 			const { fields, body } = parseFrontmatter(raw);
 			agents.push({
 				name: fields.name || basename(file, ".md"),

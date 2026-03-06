@@ -51,7 +51,7 @@ function displayName(name: string): string {
 
 function parseAgentFile(filePath: string): ExpertDef | null {
 	try {
-		const raw = readFileSync(filePath, "utf-8");
+		const raw = readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 		const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
 		if (!match) return null;
 
@@ -564,7 +564,7 @@ Ask specific questions about what you need to BUILD. Each expert will return doc
 		const orchestratorPath = join(_ctx.cwd, ".pi", "agents", "pi-pi", "pi-orchestrator.md");
 		let systemPrompt = "";
 		try {
-			const raw = readFileSync(orchestratorPath, "utf-8");
+			const raw = readFileSync(orchestratorPath, "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 			const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
 			const template = match ? match[2].trim() : raw;
 			
