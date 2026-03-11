@@ -65,13 +65,17 @@ ext-agent-chain:
 ext-pi-pi:
     pi -e extensions/pi-pi.ts -e extensions/theme-cycler.ts
 
+# 15. Git Status: live git branch + staged/unstaged/untracked counts in the footer
+ext-git-status:
+    pi -e extensions/git-status.ts
+
 #ext
 
-# 15. Session Replay: scrollable timeline overlay of session history (legit)
+# 16. Session Replay: scrollable timeline overlay of session history (legit)
 ext-session-replay:
     pi -e extensions/session-replay.ts -e extensions/minimal.ts
 
-# 16. Theme cycler: Ctrl+X forward, Ctrl+Q backward, /theme picker
+# 17. Theme cycler: Ctrl+X forward, Ctrl+Q backward, /theme picker
 ext-theme-cycler:
     pi -e extensions/theme-cycler.ts -e extensions/minimal.ts
 
