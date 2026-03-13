@@ -75,6 +75,10 @@ ext-session-replay:
 ext-theme-cycler:
     pi -e extensions/theme-cycler.ts -e extensions/minimal.ts
 
+# 17. Ghostty import: /ghostty <name> to fetch and convert Ghostty themes to Pi format
+ext-ghostty:
+    pi -e extensions/ghostty-import.ts -e extensions/theme-cycler.ts -e extensions/minimal.ts
+
 # utils
 
 # Open pi with one or more stacked extensions in a new terminal: just open minimal tool-counter
