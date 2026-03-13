@@ -41,6 +41,9 @@ ext-subagent-widget:
 ext-tilldone:
     pi -e extensions/tilldone.ts -e extensions/theme-cycler.ts
 
+ext-pushover:
+    pi -e extensions/pushover-notify.ts -e extensions/minimal.ts
+
 #g2
 
 # 10. Agent team: dispatcher orchestrator with team select and grid dashboard

@@ -19,19 +19,14 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { spawn } from "child_process";
-import { readdirSync, readFileSync, existsSync, mkdirSync } from "fs";
-import { join, resolve } from "path";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
+import { scanAgentDirectory, type AgentDef, type ValidationWarning, type CollisionWarning } from "./utils/agent-loader.ts";
 
 // ── Types ────────────────────────────────────────
 
-interface ExpertDef {
-	name: string;
-	description: string;
-	tools: string;
-	systemPrompt: string;
-	file: string;
-}
+type ExpertDef = AgentDef;
 
 interface ExpertState {
 	def: ExpertDef;
@@ -47,34 +42,6 @@ interface ExpertState {
 
 function displayName(name: string): string {
 	return name.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-}
-
-function parseAgentFile(filePath: string): ExpertDef | null {
-	try {
-		const raw = readFileSync(filePath, "utf-8");
-		const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-		if (!match) return null;
-
-		const frontmatter: Record<string, string> = {};
-		for (const line of match[1].split("\n")) {
-			const idx = line.indexOf(":");
-			if (idx > 0) {
-				frontmatter[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-			}
-		}
-
-		if (!frontmatter.name) return null;
-
-		return {
-			name: frontmatter.name,
-			description: frontmatter.description || "",
-			tools: frontmatter.tools || "read,grep,find,ls",
-			systemPrompt: match[2].trim(),
-			file: filePath,
-		};
-	} catch {
-		return null;
-	}
 }
 
 // ── Expert card colors ────────────────────────────
@@ -100,35 +67,39 @@ export default function (pi: ExtensionAPI) {
 	const experts: Map<string, ExpertState> = new Map();
 	let gridCols = 3;
 	let widgetCtx: any;
+	let lastCollisions: CollisionWarning[] = [];
 
 	function loadExperts(cwd: string) {
 		// Pi Pi experts live in their own dedicated directory
 		const piPiDir = join(cwd, ".pi", "agents", "pi-pi");
 
 		experts.clear();
+		lastCollisions = [];
 
 		if (!existsSync(piPiDir)) return;
-		try {
-			for (const file of readdirSync(piPiDir)) {
-				if (!file.endsWith(".md")) continue;
-				if (file === "pi-orchestrator.md") continue;
-				const fullPath = resolve(piPiDir, file);
-				const def = parseAgentFile(fullPath);
-				if (def) {
-					const key = def.name.toLowerCase();
-					if (!experts.has(key)) {
-						experts.set(key, {
-							def,
-							status: "idle",
-							question: "",
-							elapsed: 0,
-							lastLine: "",
-							queryCount: 0,
-						});
-					}
-				}
+
+		const { agents: validAgents, collisions } = scanAgentDirectory(piPiDir, (_file, warning) => {
+			if (warning.severity === "error") {
+				console.error(`[pi-pi] ${_file}: ${warning.message}`);
 			}
-		} catch {}
+		});
+		lastCollisions = collisions;
+
+		// Exclude the orchestrator itself from the expert list
+		validAgents.delete("pi-orchestrator");
+
+		for (const [key, def] of validAgents) {
+			if (!experts.has(key)) {
+				experts.set(key, {
+					def,
+					status: "idle",
+					question: "",
+					elapsed: 0,
+					lastLine: "",
+					queryCount: 0,
+				});
+			}
+		}
 	}
 
 	// ── Grid Rendering ───────────────────────────
@@ -589,6 +560,11 @@ Ask specific questions about what you need to BUILD. Each expert will return doc
 		widgetCtx = _ctx;
 
 		loadExperts(_ctx.cwd);
+
+		for (const c of lastCollisions) {
+			_ctx.ui.notify(`⚠️ Expert collision: "${c.name}" in ${c.duplicatePath} — already loaded from ${c.originalPath}`, "warning");
+		}
+
 		updateWidget();
 
 		const expertNames = Array.from(experts.values()).map(s => displayName(s.def.name)).join(", ");
