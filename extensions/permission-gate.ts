@@ -187,6 +187,9 @@ async function showPermissionDialog<T extends string>(
 		const container = new Container();
 		let messageInputVisible = false;
 		let focusOnInput = false;
+		// Editor clears its text before calling onSubmit, so we snapshot it
+		// before each handleInput call to preserve the message for submission.
+		let lastEditorSnapshot = "";
 
 		const items: SelectItem[] = options.map((opt) => ({ value: opt, label: opt }));
 		const selectList = new SelectList(items, items.length, {
@@ -221,18 +224,23 @@ async function showPermissionDialog<T extends string>(
 		messageInput.onSubmit = () => {
 			const selected = selectList.getSelectedItem();
 			const choice = selected ? (selected.value as T) : defaultChoice;
-			const msg = getMessageText();
-			dbg(`[perm-gate] messageInput.onSubmit: choice="${choice}", message="${msg}"`);
-			done({ choice, message: msg });
+			// Use snapshot taken before handleInput cleared the editor
+			const msg = lastEditorSnapshot.trim();
+			const message = msg.length > 0 ? msg : undefined;
+			dbg(`[perm-gate] messageInput.onSubmit: choice="${choice}", message="${message}", snapshot="${lastEditorSnapshot}"`);
+			done({ choice, message });
 		};
 
 		const helpText = new Text("", 1, 0);
 		const bottomBorder = new DynamicBorder((s: string) => theme.fg("accent", s));
 
 		function getMessageText(): string | undefined {
+			// For selectList paths (Tab back then Enter), read live editor text
 			const val = messageInput.getText().trim();
-			dbg(`[perm-gate] getMessageText: raw="${messageInput.getText()}", trimmed="${val}", visible=${messageInputVisible}`);
-			return val.length > 0 ? val : undefined;
+			// Also check snapshot in case editor was cleared
+			const effective = val.length > 0 ? val : lastEditorSnapshot.trim();
+			dbg(`[perm-gate] getMessageText: live="${val}", snapshot="${lastEditorSnapshot.trim()}"`);
+			return effective.length > 0 ? effective : undefined;
 		}
 
 		function rebuildContainer(): void {
@@ -282,6 +290,9 @@ async function showPermissionDialog<T extends string>(
 						tui.requestRender();
 						return;
 					}
+					// Snapshot editor text BEFORE handleInput processes it
+					// (Editor clears text on submit before calling onSubmit)
+					lastEditorSnapshot = messageInput.getText();
 					messageInput.handleInput(data);
 				} else {
 					selectList.handleInput(data);
