@@ -23,6 +23,7 @@
 
 import { randomUUID } from "crypto";
 import {
+	appendFileSync,
 	existsSync,
 	mkdirSync,
 	readFileSync,
@@ -31,6 +32,11 @@ import {
 	writeFileSync,
 } from "fs";
 import { join, resolve } from "path";
+
+const DEBUG_LOG = join(process.cwd(), "perm-gate-debug.log");
+function dbg(msg: string): void {
+	appendFileSync(DEBUG_LOG, `[${new Date().toISOString()}] ${msg}\n`);
+}
 import {
 	DynamicBorder,
 	isToolCallEventType,
@@ -191,10 +197,14 @@ async function showPermissionDialog<T extends string>(
 			noMatch: (t) => theme.fg("warning", t),
 		});
 		selectList.onSelect = (item) => {
-			done({ choice: item.value as T, message: getMessageText() });
+			const msg = getMessageText();
+			dbg(`[perm-gate] selectList.onSelect: choice="${item.value}", message="${msg}"`);
+			done({ choice: item.value as T, message: msg });
 		};
 		selectList.onCancel = () => {
-			done({ choice: defaultChoice, message: getMessageText() });
+			const msg = getMessageText();
+			dbg(`[perm-gate] selectList.onCancel: message="${msg}"`);
+			done({ choice: defaultChoice, message: msg });
 		};
 
 		const messageLabel = new Text("", 1, 0);
@@ -211,7 +221,9 @@ async function showPermissionDialog<T extends string>(
 		messageInput.onSubmit = () => {
 			const selected = selectList.getSelectedItem();
 			const choice = selected ? (selected.value as T) : defaultChoice;
-			done({ choice, message: getMessageText() });
+			const msg = getMessageText();
+			dbg(`[perm-gate] messageInput.onSubmit: choice="${choice}", message="${msg}"`);
+			done({ choice, message: msg });
 		};
 
 		const helpText = new Text("", 1, 0);
@@ -219,6 +231,7 @@ async function showPermissionDialog<T extends string>(
 
 		function getMessageText(): string | undefined {
 			const val = messageInput.getText().trim();
+			dbg(`[perm-gate] getMessageText: raw="${messageInput.getText()}", trimmed="${val}", visible=${messageInputVisible}`);
 			return val.length > 0 ? val : undefined;
 		}
 
@@ -401,7 +414,7 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", async function onToolCall(event, ctx) {
-		console.error(`[perm-gate DEBUG] tool_call: toolCallId=${event.toolCallId}, toolName=${event.toolName}`);
+		dbg(`[perm-gate] tool_call: toolCallId=${event.toolCallId}, toolName=${event.toolName}`);
 		const feedbackFn = (message: string) => queueFeedback(event.toolCallId, message);
 
 		if (isToolCallEventType("bash", event)) {
@@ -425,19 +438,19 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 	});
 
 	function queueFeedback(toolCallId: string, message: string): void {
-		console.error(`[perm-gate DEBUG] queueFeedback: toolCallId=${toolCallId}, message="${message}"`);
+		dbg(`[perm-gate] queueFeedback: toolCallId=${toolCallId}, message="${message}"`);
 		pendingFeedback.set(toolCallId, message);
 	}
 
 	pi.on("tool_result", async function onToolResult(event: ToolResultEvent) {
-		console.error(`[perm-gate DEBUG] tool_result: toolCallId=${event.toolCallId}, hasPending=${pendingFeedback.has(event.toolCallId)}, pendingSize=${pendingFeedback.size}`);
+		dbg(`[perm-gate] tool_result: toolCallId=${event.toolCallId}, hasPending=${pendingFeedback.has(event.toolCallId)}, pendingSize=${pendingFeedback.size}`);
 		const message = pendingFeedback.get(event.toolCallId);
 		if (!message) {
 			return undefined;
 		}
 		pendingFeedback.delete(event.toolCallId);
 
-		console.error(`[perm-gate DEBUG] appending feedback: "${message}"`);
+		dbg(`[perm-gate] appending feedback: "${message}"`);
 		const feedbackBlock = {
 			type: "text" as const,
 			text: `\n\n[User feedback]: ${message}`,
@@ -483,7 +496,7 @@ function deliverFeedback(
 	message: string | undefined,
 	onFeedback?: (message: string) => void,
 ): void {
-	console.error(`[perm-gate DEBUG] deliverFeedback: message="${message}", hasOnFeedback=${!!onFeedback}`);
+	dbg(`[perm-gate] deliverFeedback: message="${message}", hasOnFeedback=${!!onFeedback}`);
 	if (message && onFeedback) {
 		onFeedback(message);
 	}
@@ -578,6 +591,7 @@ async function handleModifyToolCall(
 
 	const prompt = `🔐 ${toolName} permission request\n\nPath: ${targetPath}`;
 	const result = await showPermissionDialog(ctx, prompt, [...MODIFY_PERMISSION_OPTIONS]);
+	dbg(`[perm-gate] dialog returned: choice="${result.choice}", message="${result.message}"`);
 	const choice: ModifyPermissionChoice = result.choice ?? "Deny";
 
 	if (choice === "Allow once") {
