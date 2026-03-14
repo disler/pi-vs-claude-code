@@ -64,7 +64,7 @@ const POLL_TIMEOUT_MS = 300_000; // 5 minutes
 
 // ── IPC Types ────────────────────────────────────
 
-type IpcRequestType = "bash_dangerous" | "write" | "edit";
+type IpcRequestType = "bash" | "bash_dangerous" | "write" | "edit";
 
 interface IpcPermissionRequest {
 	id: string;
@@ -330,10 +330,84 @@ type StatusVerbosity = (typeof STATUS_VERBOSITY_OPTIONS)[number];
 type ModifyToolName = "write" | "edit";
 type ModifyPermissionChoice = (typeof MODIFY_PERMISSION_OPTIONS)[number];
 
+// ── Bash Command Parsing ─────────────────────────
+
+/**
+ * Split a shell command string into individual sub-commands.
+ * Handles &&, ||, ;, and | operators.
+ * e.g. "cd tmp/ && ls -lh | grep foo" → ["cd tmp/", "ls -lh", "grep foo"]
+ */
+function splitShellCommands(command: string): string[] {
+	return command
+		.split(/\s*(?:&&|\|\||[;|])\s*/)
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+}
+
+/**
+ * Extract the base command name from a command string.
+ * e.g. "git status --short" → "git"
+ *      "cd tmp/" → "cd"
+ *      "ENV=val node app.js" → "node"
+ */
+function extractBaseCommand(command: string): string {
+	// Skip leading env var assignments (FOO=bar BAZ=qux ...)
+	let rest = command;
+	while (/^\w+=\S*\s+/.test(rest)) {
+		rest = rest.replace(/^\w+=\S*\s+/, "");
+	}
+	const base = rest.split(/\s+/)[0] ?? "";
+	return base.replace(/^[./]+/, ""); // strip leading ./ or /
+}
+
+/**
+ * Extract all unique base commands from a (possibly chained) command string.
+ * "cd tmp/ && ls -lh | grep foo" → ["cd", "ls", "grep"]
+ */
+function extractAllBaseCommands(command: string): string[] {
+	const subs = splitShellCommands(command);
+	const bases = subs.map(extractBaseCommand).filter((b) => b.length > 0);
+	return [...new Set(bases)];
+}
+
+/**
+ * Check if all sub-commands in a command string are covered by allowed patterns.
+ * Patterns are base command names (wildcards match any args).
+ */
+function allCommandsAllowed(command: string, allowedPatterns: Set<string>): boolean {
+	const bases = extractAllBaseCommands(command);
+	if (bases.length === 0) return false;
+	return bases.every((base) => allowedPatterns.has(base));
+}
+
+/**
+ * Build the "Always allow" option labels for a command.
+ * For "cd tmp/ && ls -lh" → ["Always allow cd * (session)", "Always allow ls * (session)"]
+ * Omits bases already in the allowed set.
+ */
+function buildBashAlwaysAllowOptions(
+	command: string,
+	allowedPatterns: Set<string>,
+): string[] {
+	const bases = extractAllBaseCommands(command);
+	return bases
+		.filter((base) => !allowedPatterns.has(base))
+		.map((base) => `Always allow ${base} * (session)`);
+}
+
+/**
+ * Parse a bash "Always allow ..." choice back to the base command name.
+ */
+function parseBashAlwaysAllowChoice(choice: string): string | undefined {
+	const match = choice.match(/^Always allow (\S+) \* \(session\)$/);
+	return match?.[1];
+}
+
 // ── Main Extension ───────────────────────────────
 
 export default function permissionGateExtension(pi: ExtensionAPI): void {
 	const allowedModifyPaths = new Set<string>();
+	const allowedBashCommands = new Set<string>(); // base command names approved for the session
 	const pendingFeedback = new Map<string, string>();
 	const defaultMode = parsePermissionModeFromEnv(process.env.PI_PERM_MODE);
 	const defaultVerbosity = parseStatusVerbosityFromEnv(process.env[STATUS_VERBOSITY_ENV]);
@@ -415,11 +489,12 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("perm-clear", {
-		description: "Clear write/edit file approvals saved by permission-gate",
+		description: "Clear all session approvals (bash commands + file paths)",
 		handler: async function onPermClear(_args, ctx) {
 			allowedModifyPaths.clear();
+			allowedBashCommands.clear();
 			if (ctx.hasUI) {
-				ctx.ui.notify("permission-gate: cleared saved file approvals", "info");
+				ctx.ui.notify("permission-gate: cleared all session approvals", "info");
 			}
 		},
 	});
@@ -429,7 +504,7 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 		const feedbackFn = (message: string) => queueFeedback(event.toolCallId, message);
 
 		if (isToolCallEventType("bash", event)) {
-			return handleBashToolCall(event.input.command ?? "", ctx, ipcDir, ipcAgent, feedbackFn);
+			return handleBashToolCall(event.input.command ?? "", ctx, allowedBashCommands, ipcDir, ipcAgent, feedbackFn);
 		}
 
 		if (isToolCallEventType("write", event)) {
@@ -473,6 +548,7 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 
 	function resetSessionState(): void {
 		allowedModifyPaths.clear();
+		allowedBashCommands.clear();
 		pendingFeedback.clear();
 		mode = defaultMode;
 		statusVerbosity = defaultVerbosity;
@@ -525,31 +601,59 @@ function blockWithReason(baseReason: string, message?: string): BlockResult {
 async function handleBashToolCall(
 	command: string,
 	ctx: ExtensionContext,
+	allowedBashCommands: Set<string>,
 	ipcDir: string,
 	ipcAgent: string,
 	onFeedback?: (message: string) => void,
 ): Promise<BlockResult | undefined> {
-	const isDangerous = DANGEROUS_BASH_PATTERNS.some((pattern) => pattern.test(command));
-	if (!isDangerous) {
+	// If all sub-commands are already approved for this session, allow silently.
+	if (allCommandsAllowed(command, allowedBashCommands)) {
+		dbg(`[perm-gate] bash allowed by session patterns: ${command}`);
 		return undefined;
 	}
 
+	const isDangerous = DANGEROUS_BASH_PATTERNS.some((pattern) => pattern.test(command));
+	const icon = isDangerous ? "⚠️" : "🔐";
+	const label = isDangerous ? "Dangerous bash command" : "Bash command";
+
 	if (!ctx.hasUI) {
 		if (ipcDir) {
-			const req = createPermissionRequest(ipcAgent, "bash_dangerous", { command });
+			const req = createPermissionRequest(ipcAgent, isDangerous ? "bash_dangerous" : "bash", { command });
 			const res = await sendPermissionRequest(ipcDir, req);
 			if (res.approved) {
 				deliverFeedback(res.message, onFeedback);
 				return undefined;
 			}
-			return blockWithReason("Dangerous command blocked by parent session", res.message);
+			return blockWithReason("Bash command blocked by parent session", res.message);
 		}
-		return { block: true, reason: "Dangerous command blocked (no UI for confirmation)" };
+		return { block: true, reason: "Bash command blocked (no UI for confirmation)" };
 	}
 
-	const result = await showPermissionDialog(ctx, `⚠️ Dangerous bash command:\n\n  ${command}\n\nAllow?`, ["Yes", "No"] as const);
-	if (result.choice !== "Yes") {
+	// Build dynamic options: "Allow once", per-command "Always allow X *", "Deny"
+	const alwaysOptions = buildBashAlwaysAllowOptions(command, allowedBashCommands);
+	const options = ["Allow once", ...alwaysOptions, "Deny"] as const;
+
+	const prompt = `${icon} ${label}:\n\n  ${command}`;
+	const result = await showPermissionDialog(ctx, prompt, [...options]);
+	dbg(`[perm-gate] bash dialog: choice="${result.choice}", message="${result.message}"`);
+
+	if (result.choice === "Deny") {
 		return blockWithReason("Blocked by user", result.message);
+	}
+
+	if (result.choice === "Allow once") {
+		deliverFeedback(result.message, onFeedback);
+		return undefined;
+	}
+
+	// "Always allow X * (session)" — add base command to allowed set
+	const base = parseBashAlwaysAllowChoice(result.choice);
+	if (base) {
+		allowedBashCommands.add(base);
+		dbg(`[perm-gate] bash session-approved: "${base}"`);
+		if (ctx.hasUI) {
+			ctx.ui.notify(`permission-gate: auto-allow enabled for ${base} *`, "info");
+		}
 	}
 
 	deliverFeedback(result.message, onFeedback);

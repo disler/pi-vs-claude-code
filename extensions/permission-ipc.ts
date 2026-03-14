@@ -37,7 +37,7 @@ import {
 
 // ── Types ────────────────────────────────────────
 
-export type IpcRequestType = "bash_dangerous" | "write" | "edit";
+export type IpcRequestType = "bash" | "bash_dangerous" | "write" | "edit";
 
 export interface IpcPermissionRequest {
 	id: string;
