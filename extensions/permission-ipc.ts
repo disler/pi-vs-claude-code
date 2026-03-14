@@ -313,7 +313,6 @@ export async function showPermissionDialog<T extends string>(
 		const bottomBorder = new DynamicBorder((s: string) => theme.fg("accent", s));
 
 		function getMessageText(): string | undefined {
-			if (!messageInputVisible) return undefined;
 			const val = messageInput.getText().trim();
 			return val.length > 0 ? val : undefined;
 		}
@@ -331,7 +330,6 @@ export async function showPermissionDialog<T extends string>(
 				container.addChild(messageInput);
 				helpText.setText(theme.fg("dim", "↑↓ navigate • enter confirm • shift+enter new line • tab hide message • esc cancel"));
 			} else {
-				messageInput.setText("");
 				helpText.setText(theme.fg("dim", "↑↓ navigate • enter confirm • tab add message • esc cancel"));
 			}
 

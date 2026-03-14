@@ -218,7 +218,6 @@ async function showPermissionDialog<T extends string>(
 		const bottomBorder = new DynamicBorder((s: string) => theme.fg("accent", s));
 
 		function getMessageText(): string | undefined {
-			if (!messageInputVisible) return undefined;
 			const val = messageInput.getText().trim();
 			return val.length > 0 ? val : undefined;
 		}
@@ -236,7 +235,6 @@ async function showPermissionDialog<T extends string>(
 				container.addChild(messageInput);
 				helpText.setText(theme.fg("dim", "↑↓ navigate • enter confirm • shift+enter new line • tab hide message • esc cancel"));
 			} else {
-				messageInput.setText("");
 				helpText.setText(theme.fg("dim", "↑↓ navigate • enter confirm • tab add message • esc cancel"));
 			}
 
@@ -403,6 +401,7 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", async function onToolCall(event, ctx) {
+		console.error(`[perm-gate DEBUG] tool_call: toolCallId=${event.toolCallId}, toolName=${event.toolName}`);
 		const feedbackFn = (message: string) => queueFeedback(event.toolCallId, message);
 
 		if (isToolCallEventType("bash", event)) {
@@ -426,16 +425,19 @@ export default function permissionGateExtension(pi: ExtensionAPI): void {
 	});
 
 	function queueFeedback(toolCallId: string, message: string): void {
+		console.error(`[perm-gate DEBUG] queueFeedback: toolCallId=${toolCallId}, message="${message}"`);
 		pendingFeedback.set(toolCallId, message);
 	}
 
 	pi.on("tool_result", async function onToolResult(event: ToolResultEvent) {
+		console.error(`[perm-gate DEBUG] tool_result: toolCallId=${event.toolCallId}, hasPending=${pendingFeedback.has(event.toolCallId)}, pendingSize=${pendingFeedback.size}`);
 		const message = pendingFeedback.get(event.toolCallId);
 		if (!message) {
 			return undefined;
 		}
 		pendingFeedback.delete(event.toolCallId);
 
+		console.error(`[perm-gate DEBUG] appending feedback: "${message}"`);
 		const feedbackBlock = {
 			type: "text" as const,
 			text: `\n\n[User feedback]: ${message}`,
@@ -481,6 +483,7 @@ function deliverFeedback(
 	message: string | undefined,
 	onFeedback?: (message: string) => void,
 ): void {
+	console.error(`[perm-gate DEBUG] deliverFeedback: message="${message}", hasOnFeedback=${!!onFeedback}`);
 	if (message && onFeedback) {
 		onFeedback(message);
 	}
