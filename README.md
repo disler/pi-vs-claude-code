@@ -81,6 +81,7 @@ bun install
 | **tool-counter-widget** | `extensions/tool-counter-widget.ts` | Live-updating above-editor widget showing per-tool call counts with background colors                                                                      |
 | **subagent-widget**     | `extensions/subagent-widget.ts`     | `/sub <task>` command that spawns background Pi subagents; each gets its own streaming live-progress widget                                                |
 | **tilldone**            | `extensions/tilldone.ts`            | Task discipline system — define tasks before starting work; tracks completion state across steps; shows persistent task list in footer with live progress  |
+| **pi-backtask**         | `plugins/pi-backtask/pi-backtask.ts`| External plugin submodule from [`artiombell/pi-backtask`](https://github.com/artiombell/pi-backtask). Claude Code style task list + background jobs (`Ctrl+T`, `Ctrl+B`, `/task`, `/bg`). |
 | **agent-team**          | `extensions/agent-team.ts`          | Dispatcher-only orchestrator: the primary agent delegates all work to named specialist agents via `dispatch_agent`; shows a grid dashboard                 |
 | **system-select**       | `extensions/system-select.ts`       | `/system` command to interactively switch between agent personas/system prompts from `.pi/agents/`, `.claude/agents/`, `.gemini/agents/`, `.codex/agents/` |
 | **damage-control**      | `extensions/damage-control.ts`      | Real-time safety auditing — intercepts dangerous bash patterns and enforces path-based access controls from `.pi/damage-control-rules.yaml`                |
@@ -135,10 +136,12 @@ just ext-agent-chain        # Sequential pipeline orchestrator with step chainin
 just ext-pi-pi              # Meta-agent that builds Pi agents using parallel experts
 just ext-session-replay     # Scrollable timeline overlay of session history
 just ext-theme-cycler       # Theme cycler + minimal footer
+just ext-pi-backtask       # Task list + background jobs (Ctrl+T/Ctrl+B)
 just all                    # Open every extension in its own terminal window
 ```
 
-The `open` recipe allows you to spin up a new terminal window with any combination of stacked extensions (omit `.ts`):
+The `open` recipe allows you to spin up a new terminal window with stacked extensions.
+Pass bare extension names (omit `.ts`) or explicit `.ts` paths.
 
 ```bash
 just open purpose-gate minimal tool-counter-widget
@@ -146,11 +149,61 @@ just open purpose-gate minimal tool-counter-widget
 
 ---
 
+### External source (`pi-backtask`)
+
+`pi-backtask` is maintained as a standalone plugin repo and vendored here as a git submodule under `plugins/pi-backtask`.
+
+When cloning this repository, initialize submodules before launching that extension:
+
+```bash
+git submodule update --init --recursive
+```
+
+
+### Backtask quickstart (`pi-backtask`)
+
+`pi-backtask` mirrors Claude Code style task tracking and background jobs inside Pi.
+
+Optional: share task lists across terminal sessions by setting an explicit list id:
+
+```bash
+export PI_BACKTASK_LIST_ID=my-project
+```
+
+Launch it:
+
+```bash
+just ext-pi-backtask
+```
+
+Core commands:
+
+```bash
+/task add Investigate flaky training metrics
+/task start 1
+/task done 1
+/task list
+
+/bg run "pytest tests/unit/test_metrics.py -q"
+/bg agent "Review this file and propose refactor steps"
+/bg list
+/bg kill 2
+```
+
+Keyboard shortcuts:
+- `Ctrl+T` toggle task-list footer
+- `Ctrl+B` toggle background-task widget
+
+---
+
+
 ## Project Structure
 
 ```
 pi-vs-cc/
-├── extensions/          # Pi extension source files (.ts) — one file per extension
+├── extensions/          # Pi extension source files (.ts) for this playground
+├── plugins/             # External extension/plugin submodules
+│   └── pi-backtask/     # Standalone plugin from github.com/artiombell/pi-backtask
 ├── specs/               # Feature specifications for extensions
 ├── .pi/
 │   ├── agent-sessions/  # Ephemeral session files (gitignored)

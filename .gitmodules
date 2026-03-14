@@ -1,0 +1,3 @@
+[submodule "plugins/pi-backtask"]
+	path = plugins/pi-backtask
+	url = https://github.com/artiombell/pi-backtask.git
