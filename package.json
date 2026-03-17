@@ -4,6 +4,10 @@
   "type": "module",
   "description": "Pi Coding Agent extension playground",
   "dependencies": {
+    "better-sqlite3": "^12.8.0",
     "yaml": "^2.8.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
   }
 }

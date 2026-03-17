@@ -17,7 +17,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Database } from "bun:sqlite";
+import Database from "better-sqlite3";
 import { mkdirSync } from "fs";
 import { join, dirname } from "path";
 import type { SessionEntry, SessionMessageEntry } from "@mariozechner/pi-coding-agent";
