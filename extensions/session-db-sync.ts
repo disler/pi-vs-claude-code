@@ -17,7 +17,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import Database from "better-sqlite3";
+import Database, { type Statement } from "better-sqlite3";
 import { mkdirSync } from "fs";
 import { join, dirname } from "path";
 import type { SessionEntry, SessionMessageEntry } from "@mariozechner/pi-coding-agent";
@@ -28,9 +28,10 @@ mkdirSync(dirname(DB_PATH), { recursive: true });
 export default function (pi: ExtensionAPI) {
 	const db = new Database(DB_PATH);
 	db.exec("PRAGMA journal_mode=WAL");
-	db.exec("PRAGMA synchronous=NORMAL");
+	db.exec("PRAGMA synchronous=OFF");     // Mirror DB — JSONL is source of truth
 	db.exec("PRAGMA foreign_keys=ON");
 	db.exec("PRAGMA busy_timeout=5000");
+	db.exec("PRAGMA cache_size=-8000");    // 8MB page cache
 
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS sessions (
@@ -64,19 +65,18 @@ export default function (pi: ExtensionAPI) {
 		   active_leaf_id = excluded.active_leaf_id,
 		   updated_at = datetime('now')`
 	);
+	const insertNewEntry = db.prepare(
+		`INSERT OR IGNORE INTO session_entries (session_id, entry_id, parent_id, entry_type, message_role, payload, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`
+	);
 	const upsertEntry = db.prepare(
 		`INSERT INTO session_entries (session_id, entry_id, parent_id, entry_type, message_role, payload, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (session_id, entry_id) DO UPDATE SET payload = excluded.payload`
 	);
 
-	// Track (session_id:entry_id) → serialized payload for mutation detection
-	const syncedPayloads = new Map<string, string>();
+	let lastSyncedCount = 0;   // Skip already-iterated entries
 	let lastSeenLeafId: string | null = null;
-
-	function entryKey(sessionId: string, entryId: string) {
-		return `${sessionId}:${entryId}`;
-	}
 
 	function getMessageRole(entry: SessionEntry): string | null {
 		if (entry.type === "message") {
@@ -86,27 +86,22 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function getTimestamp(entry: SessionEntry): string {
-		// SessionEntryBase.timestamp is an ISO string
 		return entry.timestamp
 			? new Date(entry.timestamp).toISOString()
 			: new Date().toISOString();
 	}
 
-	function insertEntry(sessionId: string, entry: SessionEntry, payloadStr: string) {
-		try {
-			upsertEntry.run(
-				sessionId,
-				entry.id,
-				entry.parentId,
-				entry.type,
-				getMessageRole(entry),
-				payloadStr,
-				getTimestamp(entry)
-			);
-			syncedPayloads.set(entryKey(sessionId, entry.id), payloadStr);
-		} catch (err) {
-			console.error(`[db-sync] Insert error for entry ${entry.id}:`, err);
-		}
+	function writeEntry(stmt: Statement, sessionId: string, entry: SessionEntry) {
+		const payloadStr = JSON.stringify(entry);
+		stmt.run(
+			sessionId,
+			entry.id,
+			entry.parentId,
+			entry.type,
+			getMessageRole(entry),
+			payloadStr,
+			getTimestamp(entry),
+		);
 	}
 
 	function ensureSession(ctx: ExtensionContext) {
@@ -125,49 +120,74 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
-	function syncNewEntries(ctx: ExtensionContext) {
-		ensureSession(ctx);
-		const sessionId = ctx.sessionManager.getSessionId();
-		for (const entry of ctx.sessionManager.getEntries()) {
-			try {
-				const key = entryKey(sessionId, entry.id);
-				const payloadStr = JSON.stringify(entry);
-				if (syncedPayloads.get(key) !== payloadStr) {
-					insertEntry(sessionId, entry, payloadStr);
-				}
-			} catch (err) {
-				console.error(`[db-sync] Failed to sync entry ${entry.id}:`, err);
-			}
+	const syncInTransaction = db.transaction((sessionId: string, entries: SessionEntry[]) => {
+		// Insert only entries we haven't seen (skip first lastSyncedCount)
+		for (let i = lastSyncedCount; i < entries.length; i++) {
+			writeEntry(insertNewEntry, sessionId, entries[i]);
+		}
+		// Re-sync the last entry — it may have been mutated (e.g. streaming content)
+		if (entries.length > 0) {
+			writeEntry(upsertEntry, sessionId, entries[entries.length - 1]);
+		}
+		lastSyncedCount = entries.length;
+	});
+
+	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+	let pendingCtx: ExtensionContext | null = null;
+
+	function syncNewEntries(ctx: ExtensionContext, immediate = false) {
+		pendingCtx = ctx;
+		if (immediate) {
+			flushSync();
+			return;
+		}
+		if (!debounceTimer) {
+			debounceTimer = setTimeout(flushSync, 50);
 		}
 	}
 
-	// Session lifecycle: full sync on start/switch/fork
-	pi.on("session_start", (_event, ctx) => {
-		syncNewEntries(ctx);
-	});
+	function flushSync() {
+		debounceTimer = null;
+		const ctx = pendingCtx;
+		if (!ctx) return;
+		pendingCtx = null;
+
+		ensureSession(ctx);
+		try {
+			syncInTransaction(
+				ctx.sessionManager.getSessionId(),
+				ctx.sessionManager.getEntries(),
+			);
+		} catch (err) {
+			console.error("[db-sync] Transaction failed:", err);
+		}
+	}
+
+	// Session lifecycle: immediate sync on start/switch/fork
+	pi.on("session_start", (_event, ctx) => syncNewEntries(ctx, true));
 
 	pi.on("session_switch", (_event, ctx) => {
-		syncedPayloads.clear();
+		lastSyncedCount = 0;
 		lastSeenLeafId = null;
-		syncNewEntries(ctx);
+		syncNewEntries(ctx, true);
 	});
 
-	pi.on("session_fork", (_event, ctx) => {
-		syncNewEntries(ctx);
-	});
+	pi.on("session_fork", (_event, ctx) => syncNewEntries(ctx, true));
 
-	// Incremental sync on message/turn boundaries
-	pi.on("message_end", (_event, ctx) => syncNewEntries(ctx));
+	// Incremental sync (debounced)
 	pi.on("turn_end", (_event, ctx) => syncNewEntries(ctx));
 
-	// Structural changes
-	pi.on("session_compact", (_event, ctx) => syncNewEntries(ctx));
+	// Structural changes (debounced)
+	pi.on("session_compact", (_event, ctx) => {
+		lastSyncedCount = 0;  // Entries replaced after compaction
+		syncNewEntries(ctx);
+	});
 	pi.on("session_tree", (_event, ctx) => syncNewEntries(ctx));
-	pi.on("model_select", (_event, ctx) => syncNewEntries(ctx));
 
-	// Cleanup
+	// Cleanup: flush pending sync, then close
 	pi.on("session_shutdown", () => {
 		try {
+			flushSync();
 			db.close();
 		} catch (err) {
 			console.error("[db-sync] Failed to close database:", err);
