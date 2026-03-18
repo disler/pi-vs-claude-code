@@ -202,7 +202,7 @@ export default function (pi: ExtensionAPI) {
 			return {
 				render(width: number): string[] {
 					if (experts.size === 0) {
-						return ["", theme.fg("dim", "  No experts found. Add agent .md files to .pi/agents/pi-pi/")];
+						return ["", truncateToWidth(theme.fg("dim", "  No experts found. Add agent .md files to .pi/agents/pi-pi/"), width, "")];
 					}
 
 					const cols = Math.min(gridCols, experts.size);
