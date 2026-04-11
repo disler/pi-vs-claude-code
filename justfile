@@ -75,14 +75,24 @@ ext-session-replay:
 ext-theme-cycler:
     pi -e extensions/theme-cycler.ts -e extensions/minimal.ts
 
+# 17. Pi backtask: background task runner + persistent task list (Ctrl+B/Ctrl+T)
+ext-pi-backtask:
+    pi -e plugins/pi-backtask/pi-backtask.ts -e extensions/theme-cycler.ts
+
+
 # utils
 
-# Open pi with one or more stacked extensions in a new terminal: just open minimal tool-counter
+# Open pi with one or more stacked extensions in a new terminal.
+# Accepts extension names (e.g. minimal) or explicit .ts paths (e.g. plugins/pi-backtask/pi-backtask.ts).
 open +exts:
     #!/usr/bin/env bash
     args=""
     for ext in {{exts}}; do
-        args="$args -e extensions/$ext.ts"
+        if [[ "$ext" == */* || "$ext" == *.ts ]]; then
+            args="$args -e $ext"
+        else
+            args="$args -e extensions/$ext.ts"
+        fi
     done
     cmd="cd '{{justfile_directory()}}' && pi$args"
     escaped="${cmd//\\/\\\\}"
@@ -105,3 +115,4 @@ all:
     just open damage-control minimal theme-cycler
     just open agent-chain theme-cycler
     just open pi-pi theme-cycler
+    just open plugins/pi-backtask/pi-backtask.ts theme-cycler
