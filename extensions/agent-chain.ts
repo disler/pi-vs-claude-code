@@ -28,6 +28,7 @@ import { spawn } from "child_process";
 import { readFileSync, existsSync, readdirSync, mkdirSync, unlinkSync } from "fs";
 import { join, resolve } from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
+import { scanAgentDirectory, type AgentDef as LoaderAgentDef, type ValidationWarning, type CollisionWarning } from "./utils/agent-loader.ts";
 
 // ── Types ────────────────────────────────────────
 
@@ -42,12 +43,7 @@ interface ChainDef {
 	steps: ChainStep[];
 }
 
-interface AgentDef {
-	name: string;
-	description: string;
-	tools: string;
-	systemPrompt: string;
-}
+type AgentDef = LoaderAgentDef;
 
 interface StepState {
 	agent: string;
@@ -130,61 +126,6 @@ function parseChainYaml(raw: string): ChainDef[] {
 	return chains;
 }
 
-// ── Frontmatter Parser ───────────────────────────
-
-function parseAgentFile(filePath: string): AgentDef | null {
-	try {
-		const raw = readFileSync(filePath, "utf-8");
-		const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-		if (!match) return null;
-
-		const frontmatter: Record<string, string> = {};
-		for (const line of match[1].split("\n")) {
-			const idx = line.indexOf(":");
-			if (idx > 0) {
-				frontmatter[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-			}
-		}
-
-		if (!frontmatter.name) return null;
-
-		return {
-			name: frontmatter.name,
-			description: frontmatter.description || "",
-			tools: frontmatter.tools || "read,grep,find,ls",
-			systemPrompt: match[2].trim(),
-		};
-	} catch {
-		return null;
-	}
-}
-
-function scanAgentDirs(cwd: string): Map<string, AgentDef> {
-	const dirs = [
-		join(cwd, "agents"),
-		join(cwd, ".claude", "agents"),
-		join(cwd, ".pi", "agents"),
-	];
-
-	const agents = new Map<string, AgentDef>();
-
-	for (const dir of dirs) {
-		if (!existsSync(dir)) continue;
-		try {
-			for (const file of readdirSync(dir)) {
-				if (!file.endsWith(".md")) continue;
-				const fullPath = resolve(dir, file);
-				const def = parseAgentFile(fullPath);
-				if (def && !agents.has(def.name.toLowerCase())) {
-					agents.set(def.name.toLowerCase(), def);
-				}
-			}
-		} catch {}
-	}
-
-	return agents;
-}
-
 // ── Extension ────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -198,6 +139,7 @@ export default function (pi: ExtensionAPI) {
 	// Per-step state for the active chain
 	let stepStates: StepState[] = [];
 	let pendingReset = false;
+	let lastCollisions: CollisionWarning[] = [];
 
 	function loadChains(cwd: string) {
 		sessionDir = join(cwd, ".pi", "agent-sessions");
@@ -205,7 +147,26 @@ export default function (pi: ExtensionAPI) {
 			mkdirSync(sessionDir, { recursive: true });
 		}
 
-		allAgents = scanAgentDirs(cwd);
+		allAgents = new Map<string, AgentDef>();
+		lastCollisions = [];
+		const agentDirs = [
+			join(cwd, "agents"),
+			join(cwd, ".claude", "agents"),
+			join(cwd, ".pi", "agents"),
+		];
+		for (const dir of agentDirs) {
+			const { agents, collisions } = scanAgentDirectory(dir, (_file, warning) => {
+				if (warning.severity === "error") {
+					console.error(`[agent-chain] ${_file}: ${warning.message}`);
+				}
+			});
+			lastCollisions.push(...collisions);
+			for (const [key, def] of agents) {
+				if (!allAgents.has(key)) {
+					allAgents.set(key, def);
+				}
+			}
+		}
 
 		agentSessions.clear();
 		for (const [key] of allAgents) {
@@ -749,6 +710,10 @@ ${agentCatalog}
 
 		// Reload chains + clear agentSessions map (all agents start fresh)
 		loadChains(_ctx.cwd);
+
+		for (const c of lastCollisions) {
+			_ctx.ui.notify(`⚠️ Agent collision: "${c.name}" in ${c.duplicatePath} — already loaded from ${c.originalPath}`, "warning");
+		}
 
 		if (chains.length === 0) {
 			_ctx.ui.notify("No chains found in .pi/agents/agent-chain.yaml", "warning");
