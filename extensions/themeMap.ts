@@ -12,8 +12,10 @@
  */
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { basename } from "path";
+import { basename, join } from "path";
 import { fileURLToPath } from "url";
+import { homedir } from "os";
+import * as fs from "fs";
 
 // ── Theme assignments ──────────────────────────────────────────────────────
 //
@@ -71,6 +73,18 @@ export function applyExtensionTheme(fileUrl: string, ctx: ExtensionContext): boo
 		return true; // Pretend we succeeded, but don't overwrite the primary theme
 	}
 
+	// Always honour the user's saved theme preference over themeMap defaults
+	try {
+		const settingsPath = join(homedir(), ".pi", "agent", "settings.json");
+		if (fs.existsSync(settingsPath)) {
+			const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+			if (settings.theme) {
+				return ctx.ui.setTheme(settings.theme).success;
+			}
+		}
+	} catch {}
+
+	// No saved preference — fall back to themeMap default
 	let themeName = THEME_MAP[name];
 	
 	if (!themeName) {
