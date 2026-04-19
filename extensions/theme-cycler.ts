@@ -17,11 +17,26 @@
  * Usage: pi -e extensions/theme-cycler.ts -e extensions/minimal.ts
  */
 
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
-import { applyExtensionDefaults } from "./themeMap.ts";
+import { applyExtensionDefaults } from "./lib/themeMap.ts";
 
 export default function (pi: ExtensionAPI) {
+	function persistTheme(themeName: string): void {
+		try {
+			const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+			const raw = fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, "utf-8") : "{}";
+			const settings = JSON.parse(raw);
+			settings.theme = themeName;
+			fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+		} catch {
+			// best-effort
+		}
+	}
+
 	let currentCtx: ExtensionContext | undefined;
 	let swatchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -94,6 +109,7 @@ export default function (pi: ExtensionAPI) {
 		index = (index + direction + themes.length) % themes.length;
 		const theme = themes[index];
 		const result = ctx.ui.setTheme(theme.name);
+		persistTheme(theme.name);
 
 		if (result.success) {
 			updateStatus(ctx);
@@ -135,6 +151,7 @@ export default function (pi: ExtensionAPI) {
 
 			if (arg) {
 				const result = ctx.ui.setTheme(arg);
+				persistTheme(arg);
 				if (result.success) {
 					updateStatus(ctx);
 					showSwatch(ctx);
@@ -156,6 +173,7 @@ export default function (pi: ExtensionAPI) {
 
 			const selectedName = selected.split(/\s/)[0];
 			const result = ctx.ui.setTheme(selectedName);
+			persistTheme(selectedName);
 			if (result.success) {
 				updateStatus(ctx);
 				showSwatch(ctx);
