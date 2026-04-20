@@ -1,0 +1,40 @@
+procs:
+  minimal:
+    cmd: ["pi", "-e", "extensions/minimal.ts", "-e", "extensions/theme-cycler.ts"]
+    cwd: "."
+
+  damage-control:
+    cmd: ["pi", "-e", "extensions/damage-control.ts", "-e", "extensions/minimal.ts", "-e", "extensions/theme-cycler.ts"]
+    cwd: "."
+
+  tool-counter:
+    cmd: ["pi", "-e", "extensions/tool-counter.ts"]
+    cwd: "."
+
+  subagent-widget:
+    cmd: ["pi", "-e", "extensions/subagent-widget.ts", "-e", "extensions/pure-focus.ts", "-e", "extensions/theme-cycler.ts"]
+    cwd: "."
+
+  tilldone:
+    cmd: ["pi", "-e", "extensions/tilldone.ts", "-e", "extensions/theme-cycler.ts"]
+    cwd: "."
+
+  agent-team:
+    cmd: ["pi", "-e", "extensions/agent-team.ts", "-e", "extensions/theme-cycler.ts"]
+    cwd: "."
+
+  agent-chain:
+    cmd: ["pi", "-e", "extensions/agent-chain.ts", "-e", "extensions/theme-cycler.ts"]
+    cwd: "."
+
+  purpose-gate:
+    cmd: ["pi", "-e", "extensions/purpose-gate.ts", "-e", "extensions/minimal.ts"]
+    cwd: "."
+
+  pi-pi:
+    cmd: ["pi", "-e", "extensions/pi-pi.ts", "-e", "extensions/theme-cycler.ts"]
+    cwd: "."
+
+  session-replay:
+    cmd: ["pi", "-e", "extensions/session-replay.ts", "-e", "extensions/minimal.ts"]
+    cwd: "."
