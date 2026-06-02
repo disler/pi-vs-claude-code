@@ -115,7 +115,7 @@ Command behavior:
 - idc-pi open-all-cmux:
   - target repo = current directory
   - derive same coms project as V2
-  - create one cmux workspace named IDC: <project-name>
+  - create one cmux workspace named IDC: <repo-name> (the target repo basename)
   - include a coms-server pane
   - include panes for all roles:
     - think
@@ -160,7 +160,7 @@ Document these as internal/unsupported for direct humans unless useful.
 
 Prefer using:
 
-  cmux new-workspace --name "IDC: <project>" --cwd "$TARGET_REPO" --layout "$LAYOUT_JSON"
+  cmux new-workspace --name "IDC: <repo-name>" --cwd "$TARGET_REPO" --layout "$LAYOUT_JSON"
 
 Generate a deterministic split layout.
 
@@ -212,7 +212,7 @@ Do not silently fall back to Terminal.app windows for idc-open-all-cmux. If cmux
 
 5. Workspace/session naming
 
-- Workspace name: IDC: <project-name>
+- Workspace name: IDC: <repo-name> (target repo basename)
 - Optional workspace description: target repo path + coms project
 - Role pane/tab titles if cmux supports renaming surfaces/tabs after creation:
   - coms

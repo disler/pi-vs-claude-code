@@ -205,7 +205,7 @@ plan allowed writes:
 
 sequence allowed writes:
 - TRACKER.md
-- TRACKER-archive.md only when active IDC docs explicitly allow historical/fallback edits
+- TRACKER-archive.md (path-allowed for sequence; the "only when active IDC docs explicitly allow historical/fallback edits" condition is prompt/skill-enforced, not enforced by the path guard)
 - docs/workflow/pillar-matrices/**
 - docs/workflow/audits/**
 - docs/workflow/code-reviews/**

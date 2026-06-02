@@ -136,7 +136,10 @@ ${END_MARKER}"
 		return
 	fi
 
-	if [[ -f "$rc_file" ]] && grep -Fq "$PREFIX" "$rc_file"; then
+	# Match the exact export line, not a bare substring: a substring check
+	# false-positives on a superset path (e.g. "${PREFIX}-old") and then wrongly
+	# skips injecting our block, leaving idc-* commands missing in new shells.
+	if [[ -f "$rc_file" ]] && grep -Fqx "$path_line" "$rc_file"; then
 		echo "ok: $rc_file already references $PREFIX"
 		return
 	fi

@@ -61,6 +61,7 @@ Installer options:
 scripts/install-idc-pi --dry-run
 scripts/install-idc-pi --prefix ~/.local/bin
 scripts/install-idc-pi --no-shell-rc
+scripts/install-idc-pi --force        # replace an existing non-symlink command
 ```
 
 ### Temporary shell helpers

@@ -74,6 +74,13 @@ derive_project() {
 }
 
 PROJECT="$(derive_project)"
+# The project name is interpolated into coms-net state paths
+# (~/.pi/coms-net/projects/<project>/), so it must not contain path separators
+# or traversal sequences.
+if [[ ! "$PROJECT" =~ ^[A-Za-z0-9._-]+$ || "$PROJECT" == *..* ]]; then
+	echo "idc-pi: invalid coms project name: '$PROJECT' (allowed: letters, digits, '.', '_', '-')" >&2
+	exit 2
+fi
 
 main() {
 	local cmd="${1:-help}"
@@ -334,14 +341,15 @@ parse_dry_run() {
 			out+=("$arg")
 		fi
 	done
-	eval "$__dry_var=\"$dry\""
-	eval "$__array_var=()"
-	local item escaped
-	for item in "${out[@]}"; do
-		escaped="${item//\\/\\\\}"
-		escaped="${escaped//\"/\\\"}"
-		eval "$__array_var+=(\"$escaped\")"
-	done
+	eval "$__dry_var=$dry"
+	# Populate the caller's array via a single printf %q round-trip. %q escapes
+	# every shell metacharacter, so the eval cannot re-evaluate command
+	# substitutions, backticks, or parameter expansions in user-supplied args.
+	if (( ${#out[@]} )); then
+		eval "$__array_var=( $(printf '%q ' "${out[@]}") )"
+	else
+		eval "$__array_var=()"
+	fi
 }
 
 validate_role() {
@@ -443,11 +451,19 @@ cmux_pane_command() {
 	shift 2
 	local title="IDC $label"
 	local banner="IDC $label — $TARGET_REPO"
-	printf 'printf %s; echo %s; export PI_IDC_COMS_PROJECT=%s PI_IDC_HARNESS_REPO=%s; exec %s %s' \
+	# cmux launches each pane in a fresh shell, so inherited env does not cross
+	# the workspace boundary; forward the Ripple canonical override explicitly so
+	# the documented PI_IDC_RIPPLE_ALLOW_CANONICAL flag works in cmux mode too.
+	local extra_env=""
+	if [[ -n "${PI_IDC_RIPPLE_ALLOW_CANONICAL:-}" ]]; then
+		extra_env=" PI_IDC_RIPPLE_ALLOW_CANONICAL=$(shell_quote "$PI_IDC_RIPPLE_ALLOW_CANONICAL")"
+	fi
+	printf 'printf %s; echo %s; export PI_IDC_COMS_PROJECT=%s PI_IDC_HARNESS_REPO=%s%s; exec %s %s' \
 		"$(shell_quote "\\033]0;$title\\007")" \
 		"$(shell_quote "$banner")" \
 		"$(shell_quote "$PROJECT")" \
 		"$(shell_quote "$HARNESS_REPO")" \
+		"$extra_env" \
 		"$(shell_quote "$SCRIPT_SELF")" \
 		"$(shell_quote "$internal_cmd")"
 	local arg
@@ -618,8 +634,8 @@ open_terminal() {
 }
 
 wait_for_server() {
-	local i
-	for i in $(seq 1 20); do
+	local _
+	for _ in $(seq 1 20); do
 		if server_running; then return 0; fi
 		sleep 0.5
 	done
@@ -631,7 +647,8 @@ server_json_path() {
 }
 
 server_running() {
-	local json="$(server_json_path)"
+	local json
+	json="$(server_json_path)"
 	[[ -f "$json" ]] || return 1
 	local pid url
 	pid="$(json_get "$json" pid)"

@@ -132,7 +132,11 @@ const BUILD_BLOCKED = [
 	"**/CLAUDE.md",
 ];
 
-const SEPARATORS = new Set([";", "&&", "||", "|"]);
+const SEPARATORS = new Set([";", "&&", "||", "|", "&"]);
+
+// git global options that consume the following token, so the subcommand finder
+// must skip both the flag and its value before reading the subcommand.
+const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"]);
 
 export function isIdcRole(role: string): role is IdcRole {
 	return IDC_ROLES.has(role as IdcRole);
@@ -301,9 +305,35 @@ export function analyzeBashCommand(command: string): BashMutation[] {
 			continue;
 		}
 
-		if (token === "mv" || token === "cp") {
+		if (token === "mv") {
+			// mv removes every source and writes the destination, so all path
+			// operands must be in role authority (not just the destination).
+			const args = extractCommandArgs(tokens, i).filter(isPathLikeArg);
+			mutations.push({ kind: token, paths: args, unscoped: args.length === 0 });
+			continue;
+		}
+
+		if (token === "cp") {
+			// cp only writes the destination; sources are reads, which roles may do.
 			const args = extractCommandArgs(tokens, i).filter(isPathLikeArg);
 			mutations.push({ kind: token, paths: args.length > 0 ? [args[args.length - 1]] : [], unscoped: args.length === 0 });
+			continue;
+		}
+
+		if (token === "ln") {
+			// ln creates the link name and (for -s) may point outside authority;
+			// treat every path operand as a mutation target.
+			const args = extractCommandArgs(tokens, i).filter(isPathLikeArg);
+			mutations.push({ kind: token, paths: args, unscoped: args.length === 0 });
+			continue;
+		}
+
+		if (token === "dd") {
+			// dd's write target is a key=value operand (of=<path>), which
+			// isPathLikeArg rejects, so read it from the raw args instead.
+			const ofArg = extractCommandArgs(tokens, i).find((arg) => arg.startsWith("of="));
+			const target = ofArg ? ofArg.slice(3) : undefined;
+			mutations.push({ kind: token, paths: target ? [target] : [], unscoped: !target });
 			continue;
 		}
 
@@ -326,7 +356,7 @@ export function analyzeBashCommand(command: string): BashMutation[] {
 		}
 
 		if (token === "git") {
-			const subcommand = firstNonOptionArg(extractCommandArgs(tokens, i));
+			const subcommand = gitSubcommand(extractCommandArgs(tokens, i));
 			if (subcommand && ["commit", "merge", "reset"].includes(subcommand)) {
 				mutations.push({ kind: `git ${subcommand}`, paths: [], unscoped: true });
 			}
@@ -585,10 +615,16 @@ function shellWords(command: string): string[] {
 			continue;
 		}
 
-		if (ch === "&" && next === "&") {
+		if (ch === "&") {
 			flush();
-			words.push("&&");
-			i++;
+			if (next === "&") {
+				words.push("&&");
+				i++;
+			} else {
+				// A lone & backgrounds the preceding command and separates it
+				// from the next, so subsequent tokens are a new command.
+				words.push("&");
+			}
 			continue;
 		}
 
@@ -619,8 +655,19 @@ function isPathLikeArg(arg: string): boolean {
 	return true;
 }
 
-function firstNonOptionArg(args: string[]): string | undefined {
-	return args.find((arg) => isPathLikeArg(arg));
+// Resolve a git subcommand, skipping global options (and any value they consume)
+// such as `-C <path>` or `-c <name=value>` so they cannot mask `commit`/`reset`.
+function gitSubcommand(args: string[]): string | undefined {
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (GIT_VALUE_OPTIONS.has(arg)) {
+			i++;
+			continue;
+		}
+		if (arg.startsWith("-")) continue;
+		return arg;
+	}
+	return undefined;
 }
 
 function lastPathLikeArg(args: string[]): string | undefined {
