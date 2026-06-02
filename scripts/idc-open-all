@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+IDC_PI="$SCRIPT_DIR/idc-pi"
+if [[ ! -x "$IDC_PI" && -n "${PI_IDC_HARNESS_REPO:-}" ]]; then
+	IDC_PI="$PI_IDC_HARNESS_REPO/scripts/idc-pi"
+fi
+exec "$IDC_PI" open-all "$@"

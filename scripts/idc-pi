@@ -1,0 +1,755 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_HARNESS_REPO="/Users/jeremy/dev/proj/pi-vs-claude-code"
+DEFAULT_CMUX_BIN="/Applications/cmux.app/Contents/Resources/bin/cmux"
+ALL_ROLES=(think plan sequence ripple build-impl build-review build-finish)
+COMS_TOOLS="coms_net_list,coms_net_send,coms_net_get,coms_net_await"
+
+TARGET_REPO="$(pwd -P)"
+HARNESS_REPO="${PI_IDC_HARNESS_REPO:-$DEFAULT_HARNESS_REPO}"
+HARNESS_REPO="$(cd "$HARNESS_REPO" 2>/dev/null && pwd -P || printf '%s' "$HARNESS_REPO")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+PROJECT=""
+
+usage() {
+	cat <<'USAGE'
+IDC Pi Network portable launcher
+
+Usage:
+  idc-pi server [--dry-run]
+  idc-pi open-all [--dry-run] [pi args...]
+  idc-pi open <roles...> [--dry-run]
+  idc-pi run <role> [--dry-run] [pi args...]
+  idc-pi open-all-cmux [--dry-run]
+  idc-pi open-cmux <roles...> [--dry-run]
+  idc-pi cmux-doctor
+  idc-pi doctor
+  idc-pi internal-run-server [--dry-run]
+  idc-pi internal-run-role <role> [--dry-run] [pi args...]
+  idc-pi help
+
+Accepted roles:
+  think plan sequence ripple build-impl build-review build-finish
+
+Environment:
+  PI_IDC_HARNESS_REPO        Harness repo path (default: /Users/jeremy/dev/proj/pi-vs-claude-code)
+  PI_IDC_COMS_PROJECT        Override coms-net project
+  PI_IDC_SESSION_DIR         Override session directory (default: TARGET_REPO/.pi/agent-sessions)
+  PI_IDC_GUARD_MODE          off | warn | block (default: block)
+  PI_IDC_RIPPLE_ALLOW_CANONICAL=1 allows Ripple canonical/planning writes
+  PI_IDC_CMUX_WORKSPACE_PREFIX Workspace prefix for cmux mode (default: IDC)
+  PI_IDC_CMUX_LAYOUT         grid | linear (default: grid)
+USAGE
+}
+
+derive_project() {
+	if [[ -n "${PI_IDC_COMS_PROJECT:-}" ]]; then
+		printf '%s\n' "$PI_IDC_COMS_PROJECT"
+		return
+	fi
+
+	local cfg="$TARGET_REPO/WORKFLOW-config.yaml"
+	if [[ -f "$cfg" ]]; then
+		local name
+		name="$(awk '
+			/^[[:space:]]*#/ { next }
+			/^[^[:space:]][^:]*:/ { in_project = ($0 ~ /^project:[[:space:]]*$/) }
+			in_project && /^[[:space:]]+name:[[:space:]]*/ {
+				sub(/^[[:space:]]+name:[[:space:]]*/, "")
+				sub(/[[:space:]]+#.*/, "")
+				gsub(/^[[:space:]"'"'"']+|[[:space:]"'"'"']+$/, "")
+				print
+				exit
+			}
+		' "$cfg")"
+		if [[ -n "$name" ]]; then
+			printf 'idc-%s\n' "$name"
+			return
+		fi
+	fi
+
+	printf 'idc-%s\n' "$(basename "$TARGET_REPO")"
+}
+
+PROJECT="$(derive_project)"
+
+main() {
+	local cmd="${1:-help}"
+	if [[ $# -gt 0 ]]; then shift; fi
+
+	case "$cmd" in
+		server) command_server "$@" ;;
+		open-all) command_open_all "$@" ;;
+		open) command_open "$@" ;;
+		run) command_run "$@" ;;
+		open-all-cmux) command_open_all_cmux "$@" ;;
+		open-cmux) command_open_cmux "$@" ;;
+		cmux-doctor) command_cmux_doctor "$@" ;;
+		doctor) command_doctor "$@" ;;
+		internal-run-server) command_internal_run_server "$@" ;;
+		internal-run-role) command_internal_run_role "$@" ;;
+		help|-h|--help) usage ;;
+		*)
+			echo "idc-pi: unknown command: $cmd" >&2
+			usage >&2
+			exit 2
+			;;
+	esac
+}
+
+command_server() {
+	local dry_run=0
+	local extra=()
+	parse_dry_run dry_run extra "$@"
+	local cmd
+	if (( ${#extra[@]} )); then
+		cmd="$(server_shell_command "${extra[@]}")"
+	else
+		cmd="$(server_shell_command)"
+	fi
+	if [[ "$dry_run" == "1" ]]; then
+		echo "$cmd"
+		return
+	fi
+	cd "$TARGET_REPO"
+	export PI_COMS_NET_PROJECT="$PROJECT"
+	export PI_IDC_HARNESS_REPO="$HARNESS_REPO"
+	if (( ${#extra[@]} )); then
+		exec bun "$HARNESS_REPO/scripts/coms-net-server.ts" "${extra[@]}"
+	else
+		exec bun "$HARNESS_REPO/scripts/coms-net-server.ts"
+	fi
+}
+
+command_open_all() {
+	local dry_run=0
+	local extra=()
+	parse_dry_run dry_run extra "$@"
+	ensure_server "$dry_run"
+	local role
+	for role in "${ALL_ROLES[@]}"; do
+		if (( ${#extra[@]} )); then
+			open_role_terminal "$role" "$dry_run" "${extra[@]}"
+		else
+			open_role_terminal "$role" "$dry_run"
+		fi
+	done
+}
+
+command_open() {
+	local dry_run=0
+	local args=()
+	parse_dry_run dry_run args "$@"
+	if [[ "${#args[@]}" -eq 0 ]]; then
+		echo "idc-pi open requires at least one role" >&2
+		exit 2
+	fi
+	local role
+	for role in "${args[@]}"; do validate_role "$role"; done
+	ensure_server "$dry_run"
+	for role in "${args[@]}"; do
+		open_role_terminal "$role" "$dry_run"
+	done
+}
+
+command_run() {
+	local dry_run=0
+	local args=()
+	parse_dry_run dry_run args "$@"
+	if [[ "${#args[@]}" -lt 1 ]]; then
+		echo "idc-pi run requires a role" >&2
+		exit 2
+	fi
+	local role="${args[0]}"
+	validate_role "$role"
+	local extra=("${args[@]:1}")
+	local cmd
+	if (( ${#extra[@]} )); then
+		cmd="$(role_shell_command "$role" "${extra[@]}")"
+	else
+		cmd="$(role_shell_command "$role")"
+	fi
+	if [[ "$dry_run" == "1" ]]; then
+		echo "$cmd"
+		return
+	fi
+	cd "$TARGET_REPO"
+	export PI_COMS_NET_PROJECT="$PROJECT"
+	export PI_IDC_HARNESS_REPO="$HARNESS_REPO"
+	if (( ${#extra[@]} )); then
+		build_role_argv "$role" "${extra[@]}"
+	else
+		build_role_argv "$role"
+	fi
+	exec "${ROLE_CMD[@]}"
+}
+
+command_open_all_cmux() {
+	local dry_run=0
+	local args=()
+	parse_dry_run dry_run args "$@"
+	if (( ${#args[@]} )); then
+		echo "idc-pi open-all-cmux only accepts --dry-run" >&2
+		exit 2
+	fi
+	open_cmux_workspace "$dry_run" "${ALL_ROLES[@]}"
+}
+
+command_open_cmux() {
+	local dry_run=0
+	local args=()
+	parse_dry_run dry_run args "$@"
+	if [[ "${#args[@]}" -eq 0 ]]; then
+		echo "idc-pi open-cmux requires at least one role" >&2
+		exit 2
+	fi
+	local role
+	for role in "${args[@]}"; do validate_role "$role"; done
+	open_cmux_workspace "$dry_run" "${args[@]}"
+}
+
+command_internal_run_server() {
+	command_server "$@"
+}
+
+command_internal_run_role() {
+	local dry_run=0
+	local args=()
+	parse_dry_run dry_run args "$@"
+	if [[ "${#args[@]}" -lt 1 ]]; then
+		echo "idc-pi internal-run-role requires a role" >&2
+		exit 2
+	fi
+	local role="${args[0]}"
+	validate_role "$role"
+	local extra=("${args[@]:1}")
+	if [[ "$dry_run" == "1" ]]; then
+		command_run "$role" --dry-run "${extra[@]}"
+		return
+	fi
+	wait_for_server
+	command_run "$role" "${extra[@]}"
+}
+
+command_cmux_doctor() {
+	if [[ $# -gt 0 ]]; then
+		echo "idc-pi cmux-doctor does not accept arguments" >&2
+		exit 2
+	fi
+
+	local cmux=""
+	local mode=""
+	local likely="no"
+	local reason="cmux binary not found"
+	if cmux="$(cmux_binary 2>/dev/null)"; then
+		mode="$(cmux_access_mode "$cmux" 2>/dev/null || true)"
+		if inside_cmux; then
+			likely="yes"
+			reason="running inside cmux"
+		elif [[ "$mode" == "cmuxOnly" ]]; then
+			likely="no"
+			reason="access_mode is cmuxOnly and this shell is outside cmux"
+		elif [[ -n "$mode" ]]; then
+			likely="yes"
+			reason="access_mode is $mode"
+		else
+			likely="unknown"
+			reason="could not read cmux capabilities"
+		fi
+	fi
+
+	cat <<EOF
+IDC Pi cmux doctor
+  target repo:       $TARGET_REPO
+  harness repo:      $HARNESS_REPO
+  project:           $PROJECT
+  cmux path:         ${cmux:-not found}
+  cmux version:      $(cmux_version_string "$cmux")
+  access_mode:       ${mode:-unknown}
+  CMUX_WORKSPACE_ID: ${CMUX_WORKSPACE_ID:-unset}
+  CMUX_SURFACE_ID:   ${CMUX_SURFACE_ID:-unset}
+  inside cmux:       $(inside_cmux && echo yes || echo no)
+  can create likely: $likely ($reason)
+EOF
+}
+
+command_doctor() {
+	if [[ $# -gt 0 ]]; then
+		echo "idc-pi doctor does not accept arguments" >&2
+		exit 2
+	fi
+
+	echo "IDC Pi doctor"
+	echo "  target repo:  $TARGET_REPO"
+	echo "  harness repo: $HARNESS_REPO"
+	echo "  project:      $PROJECT"
+	echo "  session dir:  $(display_session_dir)"
+	echo ""
+	echo "Target IDC files:"
+	print_found "$TARGET_REPO/WORKFLOW.md"
+	print_found "$TARGET_REPO/WORKFLOW-config.yaml"
+	print_found "$TARGET_REPO/docs/workflow/tracker-config.yaml"
+	echo ""
+	echo "Harness assets:"
+	print_found "$HARNESS_REPO/extensions/coms-net.ts"
+	print_found "$HARNESS_REPO/extensions/minimal.ts"
+	print_found "$HARNESS_REPO/extensions/theme-cycler.ts"
+	print_found "$HARNESS_REPO/extensions/idc-role-harness.ts"
+	print_found "$HARNESS_REPO/scripts/coms-net-server.ts"
+	local role
+	for role in "${ALL_ROLES[@]}"; do print_found "$(role_prompt "$role")"; done
+	echo ""
+	if command -v cmux >/dev/null 2>&1; then
+		echo "cmux: found at $(command -v cmux)"
+	else
+		echo "cmux: not found"
+	fi
+	echo ""
+	if server_running; then
+		echo "coms server: running ($(server_json_path))"
+	else
+		echo "coms server: not running for project $PROJECT"
+	fi
+	echo ""
+	echo "Role launch command previews:"
+	for role in "${ALL_ROLES[@]}"; do
+		echo "-- $role"
+		role_shell_command "$role"
+	done
+}
+
+parse_dry_run() {
+	local __dry_var="$1"
+	local __array_var="$2"
+	shift 2
+	local dry=0
+	local out=()
+	local arg
+	for arg in "$@"; do
+		if [[ "$arg" == "--dry-run" ]]; then
+			dry=1
+		else
+			out+=("$arg")
+		fi
+	done
+	eval "$__dry_var=\"$dry\""
+	eval "$__array_var=()"
+	local item escaped
+	for item in "${out[@]}"; do
+		escaped="${item//\\/\\\\}"
+		escaped="${escaped//\"/\\\"}"
+		eval "$__array_var+=(\"$escaped\")"
+	done
+}
+
+validate_role() {
+	case "$1" in
+		think|plan|sequence|ripple|build-impl|build-review|build-finish) ;;
+		*)
+			echo "idc-pi: unknown role: $1" >&2
+			echo "accepted roles: ${ALL_ROLES[*]}" >&2
+			exit 2
+			;;
+	esac
+}
+
+open_cmux_workspace() {
+	local dry_run="$1"
+	shift
+	local roles=("$@")
+	local cmux workspace_name description layout
+	cmux="$(cmux_binary 2>/dev/null || printf '%s' cmux)"
+	workspace_name="$(cmux_workspace_name)"
+	description="target: $TARGET_REPO | coms project: $PROJECT"
+	layout="$(cmux_layout_json "${roles[@]}")"
+
+	CMUX_CMD=(
+		"$cmux"
+		new-workspace
+		--name "$workspace_name"
+		--description "$description"
+		--cwd "$TARGET_REPO"
+		--layout "$layout"
+	)
+
+	if [[ "$dry_run" == "1" ]]; then
+		echo "# would run: cmux new-workspace"
+		echo "# workspace: $workspace_name"
+		echo "# cwd: $TARGET_REPO"
+		printf '# args: --name %s --cwd %s\n' "$(shell_quote "$workspace_name")" "$(shell_quote "$TARGET_REPO")"
+		echo "# pane: coms internal-run-server"
+		local role
+		for role in "${roles[@]}"; do
+			printf '# pane: %s internal-run-role %s\n' "$role" "$(shell_quote "$role")"
+		done
+		join_shell "${CMUX_CMD[@]}"
+		printf '\n'
+		return
+	fi
+
+	cmux="$(cmux_binary)"
+	CMUX_CMD[0]="$cmux"
+	ensure_cmux_automation_available "$cmux"
+	"${CMUX_CMD[@]}"
+}
+
+cmux_workspace_name() {
+	printf '%s: %s\n' "${PI_IDC_CMUX_WORKSPACE_PREFIX:-IDC}" "$(basename "$TARGET_REPO")"
+}
+
+cmux_layout_json() {
+	local roles=("$@")
+	local args=()
+	args+=("coms" "$(cmux_pane_command coms internal-run-server)")
+	local role
+	for role in "${roles[@]}"; do
+		args+=("$role" "$(cmux_pane_command "$role" internal-run-role "$role")")
+	done
+
+	bun -e '
+const [layoutMode, ...raw] = process.argv.slice(1);
+if (raw.length % 2) throw new Error("cmux layout expects label/command pairs");
+const items = [];
+for (let i = 0; i < raw.length; i += 2) items.push([raw[i], raw[i + 1]]);
+const pane = ([label, command]) => ({ pane: { surfaces: [{ type: "terminal", command }] } });
+const nodes = items.map(pane);
+const combine = (parts, direction) => {
+  if (parts.length === 1) return parts[0];
+  const mid = Math.ceil(parts.length / 2);
+  return {
+    direction,
+    split: Number((mid / parts.length).toFixed(4)),
+    children: [combine(parts.slice(0, mid), direction), combine(parts.slice(mid), direction)],
+  };
+};
+let root;
+if (nodes.length <= 2 || layoutMode === "linear") {
+  root = combine(nodes, "horizontal");
+} else {
+  const cols = nodes.length >= 7 ? 4 : Math.ceil(Math.sqrt(nodes.length));
+  const rows = [];
+  for (let i = 0; i < nodes.length; i += cols) rows.push(nodes.slice(i, i + cols));
+  root = combine(rows.map((row) => combine(row, "horizontal")), "vertical");
+}
+console.log(JSON.stringify(root));
+' "${PI_IDC_CMUX_LAYOUT:-grid}" "${args[@]}"
+}
+
+cmux_pane_command() {
+	local label="$1"
+	local internal_cmd="$2"
+	shift 2
+	local title="IDC $label"
+	local banner="IDC $label — $TARGET_REPO"
+	printf 'printf %s; echo %s; export PI_IDC_COMS_PROJECT=%s PI_IDC_HARNESS_REPO=%s; exec %s %s' \
+		"$(shell_quote "\\033]0;$title\\007")" \
+		"$(shell_quote "$banner")" \
+		"$(shell_quote "$PROJECT")" \
+		"$(shell_quote "$HARNESS_REPO")" \
+		"$(shell_quote "$SCRIPT_SELF")" \
+		"$(shell_quote "$internal_cmd")"
+	local arg
+	for arg in "$@"; do
+		printf ' %s' "$(shell_quote "$arg")"
+	done
+}
+
+cmux_binary() {
+	if command -v cmux >/dev/null 2>&1; then
+		command -v cmux
+		return 0
+	fi
+	if [[ -x "$DEFAULT_CMUX_BIN" ]]; then
+		printf '%s\n' "$DEFAULT_CMUX_BIN"
+		return 0
+	fi
+	echo "idc-pi: cmux not found on PATH or at $DEFAULT_CMUX_BIN" >&2
+	return 1
+}
+
+cmux_access_mode() {
+	local cmux="$1"
+	"$cmux" capabilities 2>/dev/null | awk -F'"' '/access_mode/ { print $4; exit }'
+}
+
+cmux_version_string() {
+	local cmux="$1"
+	if [[ -z "$cmux" ]]; then
+		printf 'not available'
+		return
+	fi
+	"$cmux" version 2>/dev/null | head -1 || printf 'unknown'
+}
+
+inside_cmux() {
+	[[ -n "${CMUX_WORKSPACE_ID:-}" && -n "${CMUX_SURFACE_ID:-}" ]]
+}
+
+ensure_cmux_automation_available() {
+	local cmux="$1"
+	local mode
+	if inside_cmux; then return 0; fi
+	mode="$(cmux_access_mode "$cmux" 2>/dev/null || true)"
+	if [[ "$mode" == "cmuxOnly" ]]; then
+		cat >&2 <<'EOF'
+cmux automation is not available from this process.
+Open a cmux terminal in the target repo and rerun:
+  idc-open-all-cmux
+EOF
+		exit 1
+	fi
+	if [[ -z "$mode" ]]; then
+		echo "idc-pi: could not read cmux capabilities; refusing to create workspace blindly" >&2
+		exit 1
+	fi
+}
+
+build_role_argv() {
+	local role="$1"
+	shift || true
+	local session_dir="${PI_IDC_SESSION_DIR:-$TARGET_REPO/.pi/agent-sessions}"
+	local guard_mode="${PI_IDC_GUARD_MODE:-block}"
+	local tools model thinking provider purpose color prompt skill
+
+	prompt="$(role_prompt "$role")"
+	purpose="$(role_purpose "$role")"
+	color="$(role_color "$role")"
+	skill="$(role_skill "$role")"
+	tools="$(role_tools "$role")"
+	model="$(role_model "$role")"
+	thinking="$(role_thinking "$role")"
+
+	ROLE_CMD=(
+		pi
+		-e "$HARNESS_REPO/extensions/coms-net.ts"
+		-e "$HARNESS_REPO/extensions/minimal.ts"
+		-e "$HARNESS_REPO/extensions/theme-cycler.ts"
+		-e "$HARNESS_REPO/extensions/idc-role-harness.ts"
+		--session-dir "$session_dir"
+		--session-id "idc-$role"
+		--append-system-prompt "$prompt"
+		--skill "/Users/jeremy/.agents/skills/idc-workflow"
+		--skill "$skill"
+		--project "$PROJECT"
+		--name "$role"
+		--purpose "$purpose"
+		--color "$color"
+	)
+
+	if [[ "$role" == "build-review" ]]; then
+		provider="${PI_IDC_BUILD_REVIEW_PROVIDER:-openai}"
+		ROLE_CMD+=(--provider "$provider")
+	fi
+
+	ROLE_CMD+=(
+		--model "$model"
+		--thinking "$thinking"
+		--tools "$tools"
+		--idc-role "$role"
+		--idc-guard-mode "$guard_mode"
+	)
+
+	ROLE_CMD+=("$@")
+}
+
+role_shell_command() {
+	local role="$1"
+	shift || true
+	build_role_argv "$role" "$@"
+	printf 'cd %s && PI_COMS_NET_PROJECT=%s PI_IDC_HARNESS_REPO=%s ' \
+		"$(shell_quote "$TARGET_REPO")" \
+		"$(shell_quote "$PROJECT")" \
+		"$(shell_quote "$HARNESS_REPO")"
+	join_shell "${ROLE_CMD[@]}"
+	printf '\n'
+}
+
+server_shell_command() {
+	printf 'cd %s && PI_COMS_NET_PROJECT=%s PI_IDC_HARNESS_REPO=%s ' \
+		"$(shell_quote "$TARGET_REPO")" \
+		"$(shell_quote "$PROJECT")" \
+		"$(shell_quote "$HARNESS_REPO")"
+	join_shell bun "$HARNESS_REPO/scripts/coms-net-server.ts" "$@"
+	printf '\n'
+}
+
+open_role_terminal() {
+	local role="$1"
+	local dry_run="$2"
+	shift 2 || true
+	local cmd
+	cmd="$(role_shell_command "$role" "$@")"
+	if [[ "$dry_run" == "1" ]]; then
+		echo "# would open Terminal for role: $role"
+		echo "$cmd"
+		return
+	fi
+	open_terminal "$cmd"
+}
+
+ensure_server() {
+	local dry_run="$1"
+	if server_running; then
+		if [[ "$dry_run" == "1" ]]; then
+			echo "# coms-net server already running for project $PROJECT"
+		fi
+		return
+	fi
+
+	local cmd
+	cmd="$(server_shell_command)"
+	if [[ "$dry_run" == "1" ]]; then
+		echo "# would open Terminal for coms-net server: $PROJECT"
+		echo "$cmd"
+		return
+	fi
+
+	open_terminal "$cmd"
+	wait_for_server
+}
+
+open_terminal() {
+	local cmd="$1"
+	local escaped="${cmd//\\/\\\\}"
+	escaped="${escaped//\"/\\\"}"
+	osascript -e "tell application \"Terminal\" to do script \"$escaped\"" >/dev/null
+}
+
+wait_for_server() {
+	local i
+	for i in $(seq 1 20); do
+		if server_running; then return 0; fi
+		sleep 0.5
+	done
+	echo "idc-pi: warning: coms-net server did not become healthy within 10s" >&2
+}
+
+server_json_path() {
+	printf '%s/.pi/coms-net/projects/%s/server.json\n' "$HOME" "$PROJECT"
+}
+
+server_running() {
+	local json="$(server_json_path)"
+	[[ -f "$json" ]] || return 1
+	local pid url
+	pid="$(json_get "$json" pid)"
+	url="$(json_get "$json" local_url)"
+	if [[ -n "$pid" ]] && ! kill -0 "$pid" >/dev/null 2>&1; then return 1; fi
+	[[ -n "$url" ]] || return 1
+	curl -fsS --max-time 1 "$url/health" >/dev/null 2>&1
+}
+
+json_get() {
+	local file="$1"
+	local key="$2"
+	sed -nE "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/p; s/.*\"$key\"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p" "$file" | head -1
+}
+
+role_prompt() {
+	case "$1" in
+		think) printf '%s/.pi/agents/idc/think.md\n' "$HARNESS_REPO" ;;
+		plan) printf '%s/.pi/agents/idc/plan.md\n' "$HARNESS_REPO" ;;
+		sequence) printf '%s/.pi/agents/idc/sequence.md\n' "$HARNESS_REPO" ;;
+		ripple) printf '%s/.pi/agents/idc/ripple.md\n' "$HARNESS_REPO" ;;
+		build-impl) printf '%s/.pi/agents/idc/build-implementer.md\n' "$HARNESS_REPO" ;;
+		build-review) printf '%s/.pi/agents/idc/build-reviewer.md\n' "$HARNESS_REPO" ;;
+		build-finish) printf '%s/.pi/agents/idc/build-finisher.md\n' "$HARNESS_REPO" ;;
+	esac
+}
+
+role_skill() {
+	case "$1" in
+		think) echo "/Users/jeremy/.agents/skills/codex-idc-think" ;;
+		plan) echo "/Users/jeremy/.agents/skills/codex-idc-plan" ;;
+		sequence) echo "/Users/jeremy/.agents/skills/codex-idc-sequence" ;;
+		ripple) echo "/Users/jeremy/.agents/skills/codex-idc-ripple" ;;
+		build-impl|build-review|build-finish) echo "/Users/jeremy/.agents/skills/codex-idc-build" ;;
+	esac
+}
+
+role_purpose() {
+	case "$1" in
+		think) echo "IDC Think: considerations only" ;;
+		plan) echo "IDC Plan: canonical planning" ;;
+		sequence) echo "IDC Sequence: tracker wave admission" ;;
+		ripple) echo "IDC Ripple: drift and change orders" ;;
+		build-impl) echo "IDC Build: implementation" ;;
+		build-review) echo "IDC Build: read-only review" ;;
+		build-finish) echo "IDC Build: finish and cleanup" ;;
+	esac
+}
+
+role_color() {
+	case "$1" in
+		think) echo "#72F1B8" ;;
+		plan) echo "#36F9F6" ;;
+		sequence) echo "#FEDE5D" ;;
+		ripple) echo "#C792EA" ;;
+		build-impl) echo "#FF8B39" ;;
+		build-review) echo "#FF7EDB" ;;
+		build-finish) echo "#4D9DE0" ;;
+	esac
+}
+
+role_tools() {
+	if [[ "$1" == "build-review" ]]; then
+		printf 'read,bash,grep,find,ls,%s\n' "$COMS_TOOLS"
+	else
+		printf 'read,write,edit,bash,grep,find,ls,%s\n' "$COMS_TOOLS"
+	fi
+}
+
+role_model() {
+	case "$1" in
+		think) echo "${PI_IDC_THINK_MODEL:-claude-opus-4-7}" ;;
+		plan) echo "${PI_IDC_PLAN_MODEL:-claude-opus-4-7}" ;;
+		sequence) echo "${PI_IDC_SEQUENCE_MODEL:-deepseek/deepseek-v4-pro}" ;;
+		ripple) echo "${PI_IDC_RIPPLE_MODEL:-deepseek/deepseek-v4-pro}" ;;
+		build-impl) echo "${PI_IDC_BUILD_IMPL_MODEL:-claude-opus-4-7}" ;;
+		build-review) echo "${PI_IDC_BUILD_REVIEW_MODEL:-gpt-5.5}" ;;
+		build-finish) echo "${PI_IDC_BUILD_FINISH_MODEL:-claude-opus-4-7}" ;;
+	esac
+}
+
+role_thinking() {
+	case "$1" in
+		think) echo "${PI_IDC_THINK_THINKING:-high}" ;;
+		plan) echo "${PI_IDC_PLAN_THINKING:-high}" ;;
+		sequence) echo "${PI_IDC_SEQUENCE_THINKING:-high}" ;;
+		ripple) echo "${PI_IDC_RIPPLE_THINKING:-high}" ;;
+		build-impl) echo "${PI_IDC_BUILD_IMPL_THINKING:-high}" ;;
+		build-review) echo "${PI_IDC_BUILD_REVIEW_THINKING:-high}" ;;
+		build-finish) echo "${PI_IDC_BUILD_FINISH_THINKING:-high}" ;;
+	esac
+}
+
+display_session_dir() {
+	local dir="${PI_IDC_SESSION_DIR:-$TARGET_REPO/.pi/agent-sessions}"
+	if [[ "$dir" = /* ]]; then echo "$dir"; else echo "$TARGET_REPO/$dir"; fi
+}
+
+print_found() {
+	if [[ -e "$1" ]]; then
+		echo "  found   $1"
+	else
+		echo "  missing $1"
+	fi
+}
+
+join_shell() {
+	local first=1
+	local arg
+	for arg in "$@"; do
+		if [[ "$first" == "1" ]]; then first=0; else printf ' '; fi
+		shell_quote "$arg"
+	done
+}
+
+shell_quote() {
+	local s="$1"
+	printf "'%s'" "$(printf '%s' "$s" | sed "s/'/'\\\\''/g")"
+}
+
+main "$@"

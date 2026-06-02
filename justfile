@@ -157,3 +157,65 @@ coms3 *args:
 # coms-net with z-ai/glm-5.1
 coms4 *args:
     pi -e extensions/coms-net.ts -e extensions/minimal.ts -e extensions/theme-cycler.ts --model z-ai/glm-5.1 {{args}}
+
+# ------------------------ IDC Pi Network (portable coms-net role harness) ------------------------
+
+# Install durable idc-* commands into ~/.local/bin and shell PATH
+install-idc *args:
+    scripts/install-idc-pi {{args}}
+
+# Portable IDC coms-net server for the current repo/project
+idc-coms-server *args:
+    scripts/idc-pi server {{args}}
+
+# IDC Think role — considerations only, persistent session idc-think
+pi-think *args:
+    scripts/idc-pi run think {{args}}
+
+# IDC Plan role — canonical planning artifacts, persistent session idc-plan
+pi-plan *args:
+    scripts/idc-pi run plan {{args}}
+
+# IDC Sequence role — TRACKER sequencing, persistent session idc-sequence
+pi-sequence *args:
+    scripts/idc-pi run sequence {{args}}
+
+# IDC Ripple role — canonical drift/change orders, persistent session idc-ripple
+pi-ripple *args:
+    scripts/idc-pi run ripple {{args}}
+
+# IDC Build implementer — admitted source/test work, persistent session idc-build-impl
+pi-build-impl *args:
+    scripts/idc-pi run build-impl {{args}}
+
+# IDC Build reviewer — read-only adversarial review, persistent session idc-build-review
+pi-build-review *args:
+    scripts/idc-pi run build-review {{args}}
+
+# IDC Build finisher — accepted fixes, verification, merge/cleanup, persistent session idc-build-finish
+pi-build-finish *args:
+    scripts/idc-pi run build-finish {{args}}
+
+# Open all IDC role sessions in separate macOS Terminal windows and auto-start/reuse the hub
+idc-open-all *args:
+    scripts/idc-pi open-all {{args}}
+
+# Open selected IDC roles in separate macOS Terminal windows and auto-start/reuse the hub
+idc-open +roles:
+    scripts/idc-pi open {{roles}}
+
+# Open all IDC role sessions in one cmux workspace with split panes
+idc-open-all-cmux *args:
+    scripts/idc-pi open-all-cmux {{args}}
+
+# Open selected IDC roles in one cmux workspace with split panes
+idc-open-cmux +roles:
+    scripts/idc-pi open-cmux {{roles}}
+
+# Portable launcher doctor
+idc-doctor:
+    scripts/idc-pi doctor
+
+# Portable cmux doctor
+idc-cmux-doctor:
+    scripts/idc-pi cmux-doctor

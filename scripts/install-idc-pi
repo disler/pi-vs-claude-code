@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+COMMANDS=(idc-pi idc-open-all idc-open idc-run idc-coms-server idc-open-all-cmux idc-open-cmux)
+START_MARKER="# >>> idc-pi installer >>>"
+END_MARKER="# <<< idc-pi installer <<<"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+HARNESS_REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+PREFIX="${IDC_PI_INSTALL_PREFIX:-$HOME/.local/bin}"
+DRY_RUN=0
+FORCE=0
+UPDATE_SHELL_RC=1
+
+usage() {
+	cat <<'USAGE'
+Install IDC Pi portable commands.
+
+Usage:
+  scripts/install-idc-pi [--prefix DIR] [--dry-run] [--force] [--no-shell-rc]
+
+Installs these commands by symlink:
+  idc-pi idc-open-all idc-open idc-run idc-coms-server idc-open-all-cmux idc-open-cmux
+
+Defaults:
+  prefix: ~/.local/bin
+  shell rc: add a managed PATH block when the prefix is not already on PATH
+
+Options:
+  --prefix DIR      Install command symlinks into DIR
+  --dry-run         Print planned actions without changing files
+  --force           Replace existing non-symlink command files
+  --no-shell-rc     Do not update ~/.zshrc, ~/.bashrc, or ~/.profile
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--prefix)
+			[[ $# -ge 2 ]] || { echo "install-idc-pi: --prefix requires a directory" >&2; exit 2; }
+			PREFIX="$2"
+			shift 2
+			;;
+		--dry-run)
+			DRY_RUN=1
+			shift
+			;;
+		--force)
+			FORCE=1
+			shift
+			;;
+		--no-shell-rc)
+			UPDATE_SHELL_RC=0
+			shift
+			;;
+		-h|--help|help)
+			usage
+			exit 0
+			;;
+		*)
+			echo "install-idc-pi: unknown option: $1" >&2
+			usage >&2
+			exit 2
+			;;
+	esac
+done
+
+main() {
+	PREFIX="$(expand_path "$PREFIX")"
+	install_symlinks
+	if [[ "$UPDATE_SHELL_RC" == "1" ]]; then
+		ensure_shell_path
+	fi
+	print_summary
+}
+
+expand_path() {
+	local value="$1"
+	case "$value" in
+		~) printf '%s\n' "$HOME" ;;
+		~/*) printf '%s/%s\n' "$HOME" "${value#~/}" ;;
+		/*) printf '%s\n' "$value" ;;
+		*) printf '%s/%s\n' "$(pwd -P)" "$value" ;;
+	esac
+}
+
+install_symlinks() {
+	run mkdir -p "$PREFIX"
+
+	local command src dest current
+	for command in "${COMMANDS[@]}"; do
+		src="$HARNESS_REPO/scripts/$command"
+		dest="$PREFIX/$command"
+		if [[ ! -e "$src" ]]; then
+			echo "install-idc-pi: missing source script: $src" >&2
+			exit 1
+		fi
+
+		if [[ -L "$dest" ]]; then
+			current="$(readlink "$dest")"
+			if [[ "$current" == "$src" ]]; then
+				echo "ok: $dest -> $src"
+				continue
+			fi
+			run rm -f "$dest"
+		elif [[ -e "$dest" ]]; then
+			if [[ "$FORCE" == "1" ]]; then
+				run rm -f "$dest"
+			else
+				echo "install-idc-pi: refusing to overwrite non-symlink: $dest" >&2
+				echo "Re-run with --force if you intentionally want to replace it." >&2
+				exit 1
+			fi
+		fi
+
+		run ln -s "$src" "$dest"
+	done
+}
+
+ensure_shell_path() {
+	if path_contains "$PREFIX"; then
+		echo "ok: PATH already contains $PREFIX"
+		return
+	fi
+
+	local rc_file path_line block
+	rc_file="$(choose_shell_rc)"
+	path_line="$(path_export_line "$PREFIX")"
+	block="${START_MARKER}
+# Added by scripts/install-idc-pi so idc-open-all/idc-run are durable commands.
+${path_line}
+${END_MARKER}"
+
+	if [[ -f "$rc_file" ]] && grep -Fq "$START_MARKER" "$rc_file"; then
+		echo "ok: managed PATH block already exists in $rc_file"
+		return
+	fi
+
+	if [[ -f "$rc_file" ]] && grep -Fq "$PREFIX" "$rc_file"; then
+		echo "ok: $rc_file already references $PREFIX"
+		return
+	fi
+
+	if [[ "$DRY_RUN" == "1" ]]; then
+		echo "dry-run: append managed PATH block to $rc_file"
+		echo "$block"
+		return
+	fi
+
+	mkdir -p "$(dirname "$rc_file")"
+	{
+		if [[ -s "$rc_file" ]]; then printf '\n'; fi
+		printf '%s\n' "$block"
+	} >> "$rc_file"
+	echo "installed: PATH block added to $rc_file"
+}
+
+choose_shell_rc() {
+	local shell_name
+	shell_name="$(basename "${SHELL:-}")"
+	case "$shell_name" in
+		zsh) printf '%s\n' "$HOME/.zshrc" ;;
+		bash) printf '%s\n' "$HOME/.bashrc" ;;
+		*) printf '%s\n' "$HOME/.profile" ;;
+	esac
+}
+
+path_contains() {
+	local needle="$1"
+	case ":$PATH:" in
+		*":$needle:"*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+path_export_line() {
+	local prefix="$1"
+	case "$prefix" in
+		"$HOME"/*) printf 'export PATH="$HOME/%s:$PATH"\n' "${prefix#"$HOME"/}" ;;
+		*) printf 'export PATH="%s:$PATH"\n' "$prefix" ;;
+	esac
+}
+
+run() {
+	if [[ "$DRY_RUN" == "1" ]]; then
+		printf 'dry-run:'
+		printf ' %q' "$@"
+		printf '\n'
+	else
+		"$@"
+	fi
+}
+
+print_summary() {
+	cat <<EOF
+
+IDC Pi commands installed.
+
+Use from any IDC-enabled repo:
+  cd /path/to/repo
+  idc-open-all
+  idc-open think plan ripple
+  idc-open-all-cmux
+  idc-open-cmux think plan ripple
+  idc-run think
+
+If your current terminal does not find the command yet, open a new terminal or run:
+  export PATH="$PREFIX:\$PATH"
+EOF
+}
+
+main
