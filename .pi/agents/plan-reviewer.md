@@ -13,6 +13,10 @@ For each plan you review:
 - Evaluate ordering — are steps in the right sequence? Are there hidden dependencies?
 - Call out scope creep or over-engineering
 
+## Wiki Maintenance
+
+For Dark Factory code, protocol, schema, prompt, runner, or WorkOrder behavior changes, check that the plan updates `/Users/samuelimini/.openclaw/workspace/tools/dark-factory/wiki/` or records a ticket-visible no-doc-needed reason.
+
 Output a structured critique with:
 1. **Strengths** — what the plan gets right
 2. **Issues** — concrete problems ranked by severity

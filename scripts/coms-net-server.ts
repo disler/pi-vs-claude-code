@@ -419,7 +419,7 @@ function nameIndexRemove(
 	if (bag.size === 0) p.nameIndex.delete(name);
 }
 
-function entryToCard(e: RegistryEntry): AgentCard {
+function entryToCard(e: RegistryEntry, p?: ProjectState): AgentCard {
 	const {
 		session_id,
 		name,
@@ -447,7 +447,7 @@ function entryToCard(e: RegistryEntry): AgentCard {
 		explicit,
 		started_at,
 		context_used_pct,
-		queue_depth,
+		queue_depth: p ? Math.max(queue_depth, inboxDepthFor(p, session_id)) : queue_depth,
 		status,
 	};
 }
@@ -588,14 +588,14 @@ async function handleRegister(req: Request): Promise<Response> {
 	broadcast(
 		p,
 		"agent_joined",
-		{ project: projectName, agent: entryToCard(entry) },
+		{ project: projectName, agent: entryToCard(entry, p) },
 		body.session_id,
 	);
 
 	const sse_url = `/v1/events?project=${encodeURIComponent(projectName)}&session_id=${encodeURIComponent(body.session_id)}`;
 	const resp: RegisterResponse = {
 		ok: true,
-		agent: entryToCard(entry),
+		agent: entryToCard(entry, p),
 		heartbeat_interval_ms: HEARTBEAT_MS,
 		sse_url,
 	};
@@ -671,7 +671,7 @@ function handleEvents(req: Request, url: URL): Response {
 			for (const a of p.agents.values()) {
 				if (a.session_id === session_id) continue;
 				if (a.explicit) continue;
-				agents.push(entryToCard(a));
+				agents.push(entryToCard(a, p));
 			}
 			const snapId = ++writer.lastId;
 			try {
@@ -793,7 +793,7 @@ async function handleHeartbeat(
 					session_id: entry.session_id,
 					name: entry.name,
 					context_used_pct: entry.context_used_pct,
-					queue_depth: entry.queue_depth,
+					queue_depth: Math.max(entry.queue_depth, inboxDepthFor(p, entry.session_id)),
 					model: entry.model,
 					status: entry.status,
 				},
@@ -814,7 +814,7 @@ function handleListAgents(_req: Request, url: URL): Response {
 	if (p) {
 		for (const e of p.agents.values()) {
 			if (!includeExplicit && e.explicit) continue;
-			out.push(entryToCard(e));
+			out.push(entryToCard(e, p));
 		}
 	}
 	return json({ agents: out });

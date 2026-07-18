@@ -89,19 +89,34 @@ ext-theme-cycler:
 
 # utils
 
-# Open pi with one or more stacked extensions in a new terminal: just open minimal tool-counter
+# Start pi with one or more stacked extensions in tmux: just open minimal tool-counter
 open +exts:
     #!/usr/bin/env bash
+    set -euo pipefail
     args=""
+    suffix=""
     for ext in {{exts}}; do
         args="$args -e extensions/$ext.ts"
+        safe_ext="${ext//[^A-Za-z0-9_.-]/_}"
+        suffix="$suffix-$safe_ext"
     done
-    cmd="cd '{{justfile_directory()}}' && pi$args"
-    escaped="${cmd//\\/\\\\}"
-    escaped="${escaped//\"/\\\"}"
-    osascript -e "tell application \"Terminal\" to do script \"$escaped\""
+    session="pi-ext${suffix:-manual}-$(date +%Y%m%d-%H%M%S)"
+    tmux new-session -d -s "$session" -c '{{justfile_directory()}}' "pi$args"
+    echo "Started tmux session: $session"
+    echo "Attach with: tmux attach -t $session"
 
-# Open every extension in its own terminal window
+    if [[ "${OPENCLAW_ALLOW_TERMINAL_WINDOWS:-0}" == "1" || "${OPENCLAW_PI_LAUNCH_MODE:-}" == "visible" ]]; then
+        attach_cmd="tmux attach-session -t $session"
+        escaped="${attach_cmd//\\/\\\\}"
+        escaped="${escaped//\"/\\\"}"
+        mkdir -p "$HOME/.openclaw/logs"
+        printf '%s\tpid=%s\tsession=%s\tjust=open\targs=%s\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$session" "$args" \
+            >> "$HOME/.openclaw/logs/terminal-launches.log"
+        osascript -e "tell application \"Terminal\" to do script \"$escaped\""
+    fi
+
+# Start every extension in its own tmux session
 all:
     just open pi
     just open pure-focus 

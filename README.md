@@ -309,6 +309,7 @@ For remote / cross-LAN: set `PI_COMS_NET_SERVER_URL` and `PI_COMS_NET_AUTH_TOKEN
 - **Hop limit** — every prompt envelope carries `hops`; default `MAX_HOPS=5` (`PI_COMS_MAX_HOPS`/`PI_COMS_NET_MAX_HOPS`). Stops runaway A→B→A→B forwarding loops.
 - **Audit log** — every send/receive appends to `coms-log` / `coms-net-log` (msg_id, sender, hops only — never prompt bodies).
 - **Self-heal** — `coms` probes for stale sockets and prunes dead PIDs on every list; `coms-net` heartbeats every 10s and marks peers `stale`/`offline` on miss.
+- **Response health** — `coms-net` records `response_health` for get/await results and schema-checked auto-replies, including timeout, error, age, target, and simple schema-mismatch reasons.
 - **Localhost-by-default** — the hub refuses to bind anything other than `127.0.0.1` unless `PI_COMS_NET_AUTH_TOKEN` is set explicitly.
 
 ### Trade-offs (be honest about both sides)

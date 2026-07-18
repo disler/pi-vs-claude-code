@@ -9,6 +9,8 @@ __pycache__/
 .env
 
 .pi/agent-sessions/
+.pi/openclaw-teams/
+.claude/
 
 
 .playwright-cli/

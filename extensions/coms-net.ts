@@ -144,6 +144,7 @@ interface PendingReply {
 	reject: (err: Error) => void;
 	promise: Promise<{ response?: any; error?: string | null }>;
 	result?: { response?: any; error?: string | null };
+	response_schema?: object | null;
 	target_name?: string;
 	target_session?: string;
 	created_at: string;
@@ -491,6 +492,44 @@ export default function (pi: ExtensionAPI) {
 		} catch {
 			// best-effort
 		}
+	}
+
+	function elapsedMs(iso: string | undefined): number | null {
+		if (!iso) return null;
+		const n = Date.parse(iso);
+		return Number.isFinite(n) ? Date.now() - n : null;
+	}
+
+	function schemaHealth(schema: any, value: any): { ok: boolean; reason?: string } {
+		if (!schema || typeof schema !== "object") return { ok: true };
+		if (schema.type === "object") {
+			if (!value || typeof value !== "object" || Array.isArray(value)) {
+				return { ok: false, reason: "response is not an object" };
+			}
+			for (const key of Array.isArray(schema.required) ? schema.required : []) {
+				if (!(key in value)) return { ok: false, reason: `missing required field: ${key}` };
+			}
+		}
+		return { ok: true };
+	}
+
+	function responseHealth(msg_id: string, status: string, response: any, error: string | null, pending?: PendingReply) {
+		const age_ms = elapsedMs(pending?.created_at);
+		const health: any = {
+			status,
+			target: pending?.target_name ?? null,
+			target_session: pending?.target_session ?? null,
+			age_ms,
+			ok: status === "complete" && !error,
+			error: error ?? null,
+		};
+		const schema = schemaHealth(pending?.response_schema, response);
+		if (!schema.ok) {
+			health.ok = false;
+			health.schema_error = schema.reason;
+		}
+		audit("response_health", { msg_id, ...health });
+		return health;
 	}
 
 	// ━━ Strip auth token from any user-visible error string ━━━━━━━━━━━━━━━
@@ -1244,6 +1283,7 @@ export default function (pi: ExtensionAPI) {
 				resolve: resolveFn,
 				reject: rejectFn,
 				promise,
+				response_schema: req.response_schema,
 				target_name: params.target,
 				target_session,
 				created_at: nowIso(),
@@ -1312,12 +1352,13 @@ export default function (pi: ExtensionAPI) {
 			const pending = pendingReplies.get(msg_id);
 			if (pending && pending.result) {
 				const r = pending.result;
+				const health = responseHealth(msg_id, r.error ? "error" : "complete", r.response, r.error ?? null, pending);
 				const text = r.error
 					? `coms_net_get: error — ${r.error}`
 					: `coms_net_get: complete\n${typeof r.response === "string" ? r.response : JSON.stringify(r.response, null, 2)}`;
 				return {
 					content: [{ type: "text" as const, text }],
-					details: { status: "complete", response: r.response, error: r.error ?? null },
+					details: { status: r.error ? "error" : "complete", response: r.response, error: r.error ?? null, health },
 				};
 			}
 			// Fall back to server.
@@ -1338,17 +1379,19 @@ export default function (pi: ExtensionAPI) {
 			}
 			const status = resp?.status ?? "pending";
 			if (status === "complete" || status === "error" || status === "timeout") {
+				const health = responseHealth(msg_id, status, resp.response, resp.error ?? null, pending);
 				const text = resp.error
 					? `coms_net_get: ${status} — ${resp.error}`
 					: `coms_net_get: ${status}\n${typeof resp.response === "string" ? resp.response : JSON.stringify(resp.response, null, 2)}`;
 				return {
 					content: [{ type: "text" as const, text }],
-					details: { status, response: resp.response, error: resp.error ?? null },
+					details: { status, response: resp.response, error: resp.error ?? null, health },
 				};
 			}
+			const health = responseHealth(msg_id, status, null, null, pending);
 			return {
 				content: [{ type: "text" as const, text: `coms_net_get: ${status}` }],
-				details: { status },
+				details: { status, health },
 			};
 		},
 		renderCall(args, theme) {
@@ -1391,16 +1434,17 @@ export default function (pi: ExtensionAPI) {
 			const pending = pendingReplies.get(msg_id);
 			if (pending && pending.result) {
 				const r = pending.result;
+				const health = responseHealth(msg_id, r.error ? "error" : "complete", r.response, r.error ?? null, pending);
 				if (r.error) {
 					return {
 						content: [{ type: "text" as const, text: `coms_net_await: error — ${r.error}` }],
-						details: { error: r.error },
+						details: { error: r.error, health },
 					};
 				}
 				const resp = r.response;
 				return {
 					content: [{ type: "text" as const, text: typeof resp === "string" ? resp : JSON.stringify(resp, null, 2) }],
-					details: { response: resp },
+					details: { response: resp, health },
 				};
 			}
 
@@ -1438,15 +1482,17 @@ export default function (pi: ExtensionAPI) {
 			try { ac.abort(); } catch { /* ignore */ }
 
 			if ((winner as any).error) {
+				const health = responseHealth(msg_id, "error", (winner as any).response, (winner as any).error, pending ?? undefined);
 				return {
 					content: [{ type: "text" as const, text: `coms_net_await: error — ${(winner as any).error}` }],
-					details: { error: (winner as any).error },
+					details: { error: (winner as any).error, health },
 				};
 			}
 			const resp = (winner as any).response;
+			const health = responseHealth(msg_id, "complete", resp, null, pending ?? undefined);
 			return {
 				content: [{ type: "text" as const, text: typeof resp === "string" ? resp : JSON.stringify(resp, null, 2) }],
-				details: { response: resp },
+				details: { response: resp, health },
 			};
 		},
 		renderCall(args, theme) {
@@ -1490,6 +1536,11 @@ export default function (pi: ExtensionAPI) {
 		if (inbound.response_schema && typeof inbound.response_schema === "object") {
 			try {
 				payload = JSON.parse(lastAssistantText);
+				const health = schemaHealth(inbound.response_schema, payload);
+				if (!health.ok) {
+					error = health.reason || "response failed schema health check";
+					payload = null;
+				}
 			} catch {
 				error = "response not valid JSON";
 				payload = null;
@@ -1511,6 +1562,11 @@ export default function (pi: ExtensionAPI) {
 					ts: nowIso(),
 					msg_id: inbound.msg_id,
 					error,
+					response_health: {
+						ok: !error,
+						error,
+						schema_checked: Boolean(inbound.response_schema),
+					},
 				});
 			} catch { /* best-effort */ }
 		} catch (e: any) {
