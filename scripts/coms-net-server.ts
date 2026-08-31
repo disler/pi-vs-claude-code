@@ -31,7 +31,6 @@ import * as os from "node:os";
 const HOST = process.env.PI_COMS_NET_HOST ?? "127.0.0.1";
 const PORT = Number(process.env.PI_COMS_NET_PORT ?? 0);
 const PUBLIC_URL = process.env.PI_COMS_NET_PUBLIC_URL;
-const PROJECT = process.env.PI_COMS_NET_PROJECT ?? "default";
 const ENV_TOKEN = process.env.PI_COMS_NET_AUTH_TOKEN;
 const REG_ROOT = path.join(os.homedir(), ".pi", "coms-net");
 
@@ -1469,7 +1468,6 @@ export function main(): void {
 	const serverJsonPath = path.join(dir, "server.json");
 	const serverJson = {
 		version: 1,
-		project: PROJECT,
 		pid: process.pid,
 		host: HOST,
 		port: claimedPort,
@@ -1501,7 +1499,7 @@ export function main(): void {
 	const bootCyan = LOG_TTY ? C_CYAN : "";
 	const bootReset = LOG_TTY ? C_RESET : "";
 	console.log(`${bootCyan}coms-net${bootReset}: listening on ${bootCyan}${localUrl}${bootReset}`);
-	console.log(`${bootDim}          project=${PROJECT} pid=${process.pid}${bootReset}`);
+	console.log(`${bootDim}          pid=${process.pid}${bootReset}`);
 	console.log(`${bootDim}          server.json=${serverJsonPath}${bootReset}`);
 	if (secretPath) {
 		console.log(`${bootDim}          server.secret.json=${secretPath} (chmod 0600)${bootReset}`);

@@ -151,7 +151,6 @@ interface PendingReply {
 
 interface ServerJson {
 	version: number;
-	project: string;
 	pid?: number;
 	host?: string;
 	port?: number;
