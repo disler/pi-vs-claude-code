@@ -151,7 +151,6 @@ interface PendingReply {
 
 interface ServerJson {
 	version: number;
-	project: string;
 	pid?: number;
 	host?: string;
 	port?: number;
@@ -286,12 +285,8 @@ function readFrontmatterFromArgv(argv: string[]): { name?: string; description?:
 
 // ━━ Registry / server-discovery I/O ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-function projectDir(project: string): string {
-	return path.join(COMS_NET_DIR, "projects", project);
-}
-
-function readServerJson(project: string): ServerJson | null {
-	const p = path.join(projectDir(project), "server.json");
+function readServerJson(): ServerJson | null {
+	const p = path.join(COMS_NET_DIR, "server.json");
 	try {
 		if (!fs.existsSync(p)) return null;
 		const raw = fs.readFileSync(p, "utf-8");
@@ -303,8 +298,8 @@ function readServerJson(project: string): ServerJson | null {
 	}
 }
 
-function readServerSecret(project: string): ServerSecretJson | null {
-	const p = path.join(projectDir(project), "server.secret.json");
+function readServerSecret(): ServerSecretJson | null {
+	const p = path.join(COMS_NET_DIR, "server.secret.json");
 	try {
 		if (!fs.existsSync(p)) return null;
 		// Only trust the token if the file is mode 0600.
@@ -320,18 +315,18 @@ function readServerSecret(project: string): ServerSecretJson | null {
 	}
 }
 
-function resolveServerUrl(project: string, cliFlag: string | undefined): string | null {
+function resolveServerUrl(cliFlag: string | undefined): string | null {
 	if (cliFlag && cliFlag.length > 0) return cliFlag.replace(/\/+$/, "");
 	if (SERVER_URL_ENV && SERVER_URL_ENV.length > 0) return SERVER_URL_ENV.replace(/\/+$/, "");
-	const sj = readServerJson(project);
+	const sj = readServerJson();
 	if (sj && sj.local_url) return sj.local_url.replace(/\/+$/, "");
 	return null;
 }
 
-function resolveAuthToken(project: string, cliFlag: string | undefined): string | null {
+function resolveAuthToken(cliFlag: string | undefined): string | null {
 	if (cliFlag && cliFlag.length > 0) return cliFlag;
 	if (AUTH_TOKEN_ENV && AUTH_TOKEN_ENV.length > 0) return AUTH_TOKEN_ENV;
-	const sec = readServerSecret(project);
+	const sec = readServerSecret();
 	if (sec) return sec.token;
 	return null;
 }
@@ -912,7 +907,7 @@ export default function (pi: ExtensionAPI) {
 		includeExplicit = false;
 
 		// 2. Resolve server URL.
-		serverUrl = resolveServerUrl(project, flags.serverUrl);
+		serverUrl = resolveServerUrl(flags.serverUrl);
 		if (!serverUrl) {
 			ctx.ui?.notify?.(
 				`📡 coms-net: no server URL for project "${project}". Start one with: bun scripts/coms-net-server.ts`,
@@ -923,11 +918,11 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// 3. Resolve auth token.
-		authToken = resolveAuthToken(project, flags.authToken);
+		authToken = resolveAuthToken(flags.authToken);
 		if (!authToken) {
 			ctx.ui?.notify?.(
 				`📡 coms-net: no auth token for project "${project}". Set PI_COMS_NET_AUTH_TOKEN or pass --auth-token. ` +
-				`If running a local server, ensure ~/.pi/coms-net/projects/${project}/server.secret.json exists with mode 0600.`,
+				`If running a local server, ensure ~/.pi/coms-net/server.secret.json exists with mode 0600.`,
 				"error",
 			);
 			audit("boot_failed", { reason: "no_auth_token", project });
