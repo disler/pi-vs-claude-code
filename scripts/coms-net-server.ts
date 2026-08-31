@@ -331,10 +331,6 @@ function unauthorized(): Response {
 	});
 }
 
-function projectDir(project: string): string {
-	return path.join(REG_ROOT, "projects", project);
-}
-
 function ensureDirSync(dir: string): void {
 	fs.mkdirSync(dir, { recursive: true });
 }
@@ -1453,7 +1449,7 @@ export function main(): void {
 		TOKEN_FILE_OWNED_BY_US = false;
 	}
 
-	const dir = projectDir(PROJECT);
+	const dir = REG_ROOT;
 	ensureDirSync(dir);
 
 	// Boot Bun.serve.
